@@ -32,11 +32,21 @@ HTTP-triggered workflow: GitHub PR -> evidence + reviewers -> score -> reward de
 ## Setup
 
 ```bash
-cp ../.env.example ../.env   # fill in GITHUB_TOKEN_VALUE at minimum
+cp ../.env.example ../.env   # fill in GitHub App vars (or GITHUB_TOKEN_VALUE)
 bun install
 ```
 
-Reviewer `url` empty in `config.*.json` = stub score, so only `GITHUB_TOKEN_VALUE` is required to start.
+Reviewer `url` empty in `config.*.json` = stub score, so only GitHub access is required to start.
+
+### GitHub App token
+
+`../scripts/github-app-token.ts` mints a 1-hour, read-only installation token from the App ID + private key.
+`../scripts/simulate.sh` mints one and runs the simulation with it:
+
+```bash
+cd ..   # cre-test/
+./scripts/simulate.sh test-workflow/payloads/opened.json
+```
 
 ## Test
 
