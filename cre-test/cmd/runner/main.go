@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -43,6 +44,19 @@ func tokens() (tokenSource, error) {
 		return staticToken(t), nil
 	}
 	return nil, errors.New("set GITHUB_APP_* vars (or GITHUB_TOKEN_VALUE for dev)")
+}
+
+// creAuthMode reports what the cre CLI will use. CRE_API_KEY wins over a login session.
+func creAuthMode() string {
+	if os.Getenv("CRE_API_KEY") != "" {
+		return "api_key"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := os.Stat(filepath.Join(home, ".cre", "cre.yaml")); err == nil {
+			return "login_session"
+		}
+	}
+	return "none"
 }
 
 func run(log *slog.Logger) error {
@@ -83,7 +97,8 @@ func run(log *slog.Logger) error {
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
-	log.Info("runner listening", "addr", httpSrv.Addr, "workflow", sim.Workflow, "target", sim.Target, "wasm", sim.Wasm)
+	log.Info("runner listening", "addr", httpSrv.Addr, "workflow", sim.Workflow, "target", sim.Target,
+		"wasm", sim.Wasm, "cre_auth", creAuthMode())
 
 	select {
 	case err := <-errCh:
