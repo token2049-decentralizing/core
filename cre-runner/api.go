@@ -54,6 +54,7 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/repos/:owner/:repo/events", a.listRepoEvents)
 	g.GET("/deliveries/:delivery_id", a.getDelivery)
 	g.GET("/campaigns", a.listCampaigns)
+	g.GET("/campaigns/:id", a.getCampaign)
 	g.POST("/campaigns", a.createCampaign)
 }
 
@@ -599,6 +600,29 @@ func (a *api) createCampaign(c *gin.Context) {
 
 // GET /api/campaigns
 
+// campaignColumns embeds attached repos; flattenCampaignRepos turns them into "repos".
+const campaignColumns = "*,campaign_repos(repository_full_name)"
+
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// flattenCampaignRepos replaces the embedded campaign_repos rows with a sorted "repos" array.
+func flattenCampaignRepos(row map[string]json.RawMessage) error {
+	var links []struct {
+		RepositoryFullName string `json:"repository_full_name"`
+	}
+	if err := json.Unmarshal(row["campaign_repos"], &links); err != nil {
+		return err
+	}
+	repos := make([]string, len(links))
+	for i, l := range links {
+		repos[i] = l.RepositoryFullName
+	}
+	sort.Strings(repos)
+	delete(row, "campaign_repos")
+	row["repos"], _ = json.Marshal(repos)
+	return nil
+}
+
 var campaignStatuses = []string{"draft", "active", "paused", "ended"}
 
 func (a *api) listCampaigns(c *gin.Context) {
@@ -659,7 +683,7 @@ func (a *api) listCampaigns(c *gin.Context) {
 
 	var rows []map[string]json.RawMessage
 	from := page * pageSize
-	total, err := filter("*,campaign_repos(repository_full_name)", false).
+	total, err := filter(campaignColumns, false).
 		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
 		Order("id", &postgrest.OrderOpts{Ascending: true}).
 		Range(from, from+pageSize-1, "").
@@ -674,20 +698,10 @@ func (a *api) listCampaigns(c *gin.Context) {
 	}
 
 	for _, row := range rows {
-		var links []struct {
-			RepositoryFullName string `json:"repository_full_name"`
-		}
-		if err := json.Unmarshal(row["campaign_repos"], &links); err != nil {
+		if err := flattenCampaignRepos(row); err != nil {
 			internalError(c, "load campaigns", err)
 			return
 		}
-		repos := make([]string, len(links))
-		for i, l := range links {
-			repos[i] = l.RepositoryFullName
-		}
-		sort.Strings(repos)
-		delete(row, "campaign_repos")
-		row["repos"], _ = json.Marshal(repos)
 	}
 	if rows == nil {
 		rows = []map[string]json.RawMessage{}
@@ -702,4 +716,35 @@ func (a *api) listCampaigns(c *gin.Context) {
 			"has_more":  int64(from+len(rows)) < total,
 		},
 	})
+}
+
+// GET /api/campaigns/:id
+
+func (a *api) getCampaign(c *gin.Context) {
+	id := c.Param("id")
+	if !uuidRe.MatchString(id) {
+		// Not a UUID can't match any row; also avoids a Postgres cast error.
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+
+	var rows []map[string]json.RawMessage
+	_, err := a.db.From("campaigns").
+		Select(campaignColumns, "", false).
+		Eq("id", id).
+		Limit(1, "").
+		ExecuteTo(&rows)
+	if err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	if len(rows) == 0 {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	if err := flattenCampaignRepos(rows[0]); err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
 }
