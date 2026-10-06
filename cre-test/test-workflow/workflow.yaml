@@ -17,20 +17,20 @@
 # ==========================================================================
 staging-settings:
   user-workflow:
-    workflow-name: "test-workflow-staging"
+    workflow-name: "contriboracle-staging"
     deployment-registry: "private"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"
 
 
 # ==========================================================================
 production-settings:
   user-workflow:
-    workflow-name: "test-workflow-production"
+    workflow-name: "contriboracle-production"
     deployment-registry: "private"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.production.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"

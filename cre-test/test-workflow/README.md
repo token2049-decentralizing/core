@@ -1,27 +1,56 @@
-# Hello World (TypeScript)
+# ContribOracle CRE workflow
 
-This template provides a blank TypeScript workflow example. It aims to give a starting point for writing a workflow from scratch and to get started with local simulation.
+HTTP-triggered workflow: GitHub PR -> evidence + reviewers -> score -> reward decision.
 
-Steps to run the example
+| File | Purpose |
+| --- | --- |
+| `main.ts` | Trigger handler and workflow wiring |
+| `types.ts` | Request/response contract and config types |
+| `request.ts` | Input validation |
+| `github.ts` | GitHub evidence fetch |
+| `reviewers.ts` | Code reviewer / LLM calls |
+| `scoring.ts` | Score, eligibility, reward |
+| `hash.ts` | Canonical JSON + SHA-256 |
+| `solana.ts` | Settlement (stub) |
 
-## 1. Update .env file
+## Request
 
-You need to add a private key to env file. This is specifically required if you want to simulate chain writes. For that to work the key should be valid and funded.
-If your workflow does not do any chain write then you can just put any dummy key as a private key. e.g.
+```json
+{ "repository": "owner/repo", "pr_number": 1, "campaign_id": "example-oss-2026", "event": "opened", "notes": {} }
 ```
-CRE_ETH_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001
+
+`notes` is optional and never affects the score, reward or hash.
+
+## Response
+
+```json
+{ "score": 90, "eligible": true, "reward": "450000000", "evaluation_hash": "0x...", "policy_hash": "0x..." }
 ```
 
-## 2. Install dependencies
+`reward` is in token base units (USDC = 6 decimals).
+
+## Setup
+
 ```bash
+cp ../.env.example ../.env   # fill in GITHUB_TOKEN_VALUE at minimum
 bun install
 ```
 
-## 3. Simulate the workflow
-Run the command from <b>project root directory</b>
+Reviewer `url` empty in `config.*.json` = stub score, so only `GITHUB_TOKEN_VALUE` is required to start.
+
+## Test
 
 ```bash
-cre workflow simulate <path-to-workflow> --target=staging-settings
+bun test              # unit tests, no network
+bun run typecheck
 ```
 
-It is recommended to look into other existing examples to see how to write a workflow. You can generate them by running the `cre init` command.
+## Simulate (from `cre-test/`)
+
+Flags may differ by CLI version; check `cre workflow simulate --help`. Without them the CLI prompts for trigger and JSON input.
+
+```bash
+cre workflow simulate test-workflow --target staging-settings \
+  --non-interactive --trigger-index 0 \
+  --http-payload @test-workflow/payloads/opened.json
+```

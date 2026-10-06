@@ -1,3 +1,20 @@
 {
-  "schedule": "*/30 * * * * *"
+  "authorizedKeys": [],
+  "githubApiUrl": "https://api.github.com",
+  "campaign": {
+    "id": "example-oss-2026",
+    "tokenDecimals": 6,
+    "eligibility": {
+      "requireMerged": true,
+      "requireCiPassed": true,
+      "requireLinkedIssue": true,
+      "minScore": 70
+    },
+    "weights": { "evidence": 0.4, "codeReviewer": 0.3, "llm": 0.3 },
+    "reward": { "model": "score_based", "max": 500 }
+  },
+  "reviewers": {
+    "codeReviewer": { "url": "", "secretId": "CODE_REVIEWER_API_KEY" },
+    "llm": { "url": "", "secretId": "LLM_API_KEY" }
+  }
 }
