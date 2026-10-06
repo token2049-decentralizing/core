@@ -9,7 +9,7 @@ payload="${1:?usage: simulate.sh <payload.json>}"
 set -a; source .env; set +a
 
 # Token only lives in this process's env; never written to disk.
-GITHUB_TOKEN_VALUE="$(bun scripts/github-app-token.ts)"
+GITHUB_TOKEN_VALUE="$(go run ./cmd/github-app-token)"
 export GITHUB_TOKEN_VALUE
 [ -n "$GITHUB_TOKEN_VALUE" ] || { echo "failed to mint GitHub token" >&2; exit 1; }
 

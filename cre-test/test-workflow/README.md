@@ -1,17 +1,34 @@
-# ContribOracle CRE workflow
+# ContribOracle CRE workflow (Go)
 
 HTTP-triggered workflow: GitHub PR -> evidence + reviewers -> score -> reward decision.
 
 | File | Purpose |
 | --- | --- |
-| `main.ts` | Trigger handler and workflow wiring |
-| `types.ts` | Request/response contract and config types |
-| `request.ts` | Input validation |
-| `github.ts` | GitHub evidence fetch |
-| `reviewers.ts` | Code reviewer / LLM calls |
-| `scoring.ts` | Score, eligibility, reward |
-| `hash.ts` | Canonical JSON + SHA-256 |
-| `solana.ts` | Settlement (stub) |
+| `main.go` | WASM entry point |
+| `workflow.go` | Trigger handler and workflow wiring |
+| `types.go` | Request/response contract and config types |
+| `request.go` | Input validation |
+| `github.go` | GitHub evidence fetch |
+| `reviewers.go` | Code reviewer / LLM calls |
+| `scoring.go` | Score, eligibility, reward |
+| `hash.go` | Canonical JSON + SHA-256 |
+| `solana.go` | Settlement (stub) |
+
+Requires Go 1.25.3+ (`go.mod` is in `cre-test/`).
+
+## Concurrency
+
+The CRE runtime is single-threaded and must not be used from goroutines.
+Run requests in parallel by starting several calls, then awaiting them:
+
+```go
+a, b := sr.SendRequest(reqA), sr.SendRequest(reqB) // both in flight
+resA, _ := a.Await()
+resB, _ := b.Await()
+```
+
+`github.go` does this for reviews/files/check-runs, `reviewers.go` for both reviewers.
+Use goroutines in services outside the workflow (runner, reviewer service, load tests).
 
 ## Request
 
@@ -28,39 +45,29 @@ HTTP-triggered workflow: GitHub PR -> evidence + reviewers -> score -> reward de
 ```
 
 `reward` is in token base units (USDC = 6 decimals).
+Hashes are SHA-256 of canonical JSON (sorted keys), so any language can recompute them.
 
 ## Setup
 
 ```bash
-cp ../.env.example ../.env   # fill in GitHub App vars (or GITHUB_TOKEN_VALUE)
-bun install
+cd ..                       # cre-test/
+cp .env.example .env        # fill in GitHub App vars
+go mod download
 ```
 
 Reviewer `url` empty in `config.*.json` = stub score, so only GitHub access is required to start.
 
-### GitHub App token
-
-`../scripts/github-app-token.ts` mints a 1-hour, read-only installation token from the App ID + private key.
-`../scripts/simulate.sh` mints one and runs the simulation with it:
-
-```bash
-cd ..   # cre-test/
-./scripts/simulate.sh test-workflow/payloads/opened.json
-```
-
 ## Test
 
 ```bash
-bun test              # unit tests, no network
-bun run typecheck
+go test ./...                                     # unit + workflow tests, no network
+GOOS=wasip1 GOARCH=wasm go build -o /dev/null ./test-workflow  # same target CRE compiles to
 ```
 
 ## Simulate (from `cre-test/`)
 
-Flags may differ by CLI version; check `cre workflow simulate --help`. Without them the CLI prompts for trigger and JSON input.
+`scripts/simulate.sh` mints a 1-hour, read-only GitHub App token (`cmd/github-app-token`) and runs the simulation:
 
 ```bash
-cre workflow simulate test-workflow --target staging-settings \
-  --non-interactive --trigger-index 0 \
-  --http-payload "$(cat test-workflow/payloads/opened.json)"
+./scripts/simulate.sh test-workflow/payloads/opened.json
 ```

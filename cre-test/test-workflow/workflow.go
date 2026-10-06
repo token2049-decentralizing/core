@@ -1,0 +1,195 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"math/big"
+
+	"github.com/smartcontractkit/cre-sdk-go/capabilities/networking/http"
+	"github.com/smartcontractkit/cre-sdk-go/cre"
+)
+
+func InitWorkflow(config *Config, _ *slog.Logger, _ cre.SecretsProvider) (cre.Workflow[*Config], error) {
+	if err := validateConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+	keys := make([]*http.AuthorizedKey, 0, len(config.AuthorizedKeys))
+	for _, k := range config.AuthorizedKeys {
+		t, ok := http.KeyType_value[k.Type]
+		if !ok {
+			return nil, fmt.Errorf("unknown authorized key type %q", k.Type)
+		}
+		keys = append(keys, &http.AuthorizedKey{Type: http.KeyType(t), PublicKey: k.PublicKey})
+	}
+	return cre.Workflow[*Config]{
+		cre.Handler(http.Trigger(&http.Config{AuthorizedKeys: keys}), onHTTPTrigger),
+	}, nil
+}
+
+func validateConfig(c *Config) error {
+	switch {
+	case c.GitHubAPIURL == "":
+		return errors.New("githubApiUrl is required")
+	case c.Campaign.ID == "":
+		return errors.New("campaign.id is required")
+	}
+	switch c.Campaign.Reward.Model {
+	case "fixed", "score_based", "tiered":
+	default:
+		return fmt.Errorf("unknown reward model %q", c.Campaign.Reward.Model)
+	}
+	w := c.Campaign.Weights
+	if math.Abs(w.Evidence+w.CodeReviewer+w.LLM-1) > 1e-9 {
+		return errors.New("campaign.weights must sum to 1")
+	}
+	return nil
+}
+
+func secret(runtime cre.Runtime, id string) (string, error) {
+	s, err := runtime.GetSecret(&cre.SecretRequest{Id: id}).Await()
+	if err != nil {
+		return "", fmt.Errorf("secret %s: %w", id, err)
+	}
+	if s.Value == "" {
+		return "", fmt.Errorf("secret %s is empty (check .env / secrets.yaml)", id)
+	}
+	return s.Value, nil
+}
+
+func reviewer(runtime cre.Runtime, cfg ReviewerConfig) (reviewerCall, error) {
+	if cfg.URL == "" {
+		return reviewerCall{}, nil
+	}
+	key, err := secret(runtime, cfg.SecretID)
+	return reviewerCall{URL: cfg.URL, APIKey: key}, err
+}
+
+func providerName(name string, c reviewerCall) string {
+	if c.URL == "" {
+		return name + "-stub"
+	}
+	return name
+}
+
+func policyHash(p CampaignPolicy) (string, error) {
+	if p.raw != nil {
+		return hashJSON(p.raw)
+	}
+	return hashJSON(p)
+}
+
+// onHTTPTrigger returns the EvaluationResponse as a JSON string.
+func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (string, error) {
+	logger := runtime.Logger()
+	req, err := parseRequest(payload.Input)
+	if err != nil {
+		return "", err
+	}
+	if req.CampaignID != cfg.Campaign.ID {
+		return "", fmt.Errorf("unknown campaign %s", req.CampaignID)
+	}
+	logger.Info(fmt.Sprintf("evaluating %s#%d (%s)", req.Repository, req.PRNumber, req.Event))
+
+	token, err := secret(runtime, "GITHUB_TOKEN")
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{}
+
+	evidenceJSON, err := http.SendRequest(
+		evidenceInput{APIURL: cfg.GitHubAPIURL, Token: token, Repository: req.Repository, PRNumber: req.PRNumber},
+		runtime, client, fetchGitHubEvidence, cre.ConsensusIdenticalAggregation[string](),
+	).Await()
+	if err != nil {
+		return "", err
+	}
+	var evidence GitHubEvidence
+	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err != nil {
+		return "", err
+	}
+
+	codeCall, err := reviewer(runtime, cfg.Reviewers.CodeReviewer)
+	if err != nil {
+		return "", err
+	}
+	llmCall, err := reviewer(runtime, cfg.Reviewers.LLM)
+	if err != nil {
+		return "", err
+	}
+
+	// No reviewer URLs: use the evidence score so local runs work without reviewer APIs.
+	evScore := evidenceScore(evidence)
+	scores := reviewScores{CodeReviewer: evScore, LLM: evScore}
+	if codeCall.URL != "" || llmCall.URL != "" {
+		scores, err = http.SendRequest(
+			reviewInput{CodeReviewer: codeCall, LLM: llmCall, Evidence: evidence, StubScore: evScore},
+			runtime, client, runReviews, cre.ConsensusAggregationFromTags[reviewScores](),
+		).Await()
+		if err != nil {
+			return "", err
+		}
+	}
+	codeReviewer := ReviewerResult{Provider: providerName("code-reviewer", codeCall), Score: scores.CodeReviewer}
+	llm := ReviewerResult{Provider: providerName("llm", llmCall), Score: scores.LLM}
+
+	score := aggregateScore(evScore, codeReviewer, llm, cfg.Campaign.Weights)
+	eligible := isEligible(evidence, score, cfg.Campaign)
+	reward := big.NewInt(0)
+	if eligible {
+		reward = toBaseUnits(rewardAmount(score, cfg.Campaign), cfg.Campaign.TokenDecimals)
+	}
+
+	pHash, err := policyHash(cfg.Campaign)
+	if err != nil {
+		return "", err
+	}
+	// notes are excluded on purpose: they must not change the evaluation.
+	eHash, err := hashJSON(map[string]any{
+		"repository":  req.Repository,
+		"pr_number":   req.PRNumber,
+		"campaign_id": req.CampaignID,
+		"event":       req.Event,
+		"evidence":    evidence,
+		"reviewers":   []ReviewerResult{codeReviewer, llm},
+		"score":       score,
+		"eligible":    eligible,
+		"reward":      reward.String(),
+		"policy_hash": pHash,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// Only a merged, eligible PR moves money. "opened" is informational.
+	if req.Event == "merged" && eligible && reward.Sign() > 0 {
+		err := submitRewardDecision(runtime, RewardDecision{
+			CampaignID:     req.CampaignID,
+			Repository:     req.Repository,
+			PRNumber:       req.PRNumber,
+			Contributor:    evidence.Author,
+			Score:          score,
+			Reward:         reward,
+			EvaluationHash: eHash,
+			PolicyHash:     pHash,
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+
+	out, err := json.Marshal(EvaluationResponse{
+		Score:          score,
+		Eligible:       eligible,
+		Reward:         reward.String(),
+		EvaluationHash: eHash,
+		PolicyHash:     pHash,
+	})
+	if err != nil {
+		return "", err
+	}
+	logger.Info("result " + string(out))
+	return string(out), nil
+}
