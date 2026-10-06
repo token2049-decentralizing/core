@@ -1,5 +1,6 @@
 *.env
 *.pem
 **/binary.wasm
-**/.cre_build_tmp.wasm
+**/.cre_build_tmp.*
 build/
+node_modules/
