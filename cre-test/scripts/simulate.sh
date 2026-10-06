@@ -14,4 +14,4 @@ export GITHUB_TOKEN_VALUE
 
 cre workflow simulate test-workflow --target staging-settings \
   --non-interactive --trigger-index 0 \
-  --http-payload "@${payload}"
+  --http-payload "$(cat "${payload}")"

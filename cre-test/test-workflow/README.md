@@ -62,5 +62,5 @@ Flags may differ by CLI version; check `cre workflow simulate --help`. Without t
 ```bash
 cre workflow simulate test-workflow --target staging-settings \
   --non-interactive --trigger-index 0 \
-  --http-payload @test-workflow/payloads/opened.json
+  --http-payload "$(cat test-workflow/payloads/opened.json)"
 ```
