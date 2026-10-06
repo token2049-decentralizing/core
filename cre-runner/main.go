@@ -5,12 +5,20 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/supabase-community/supabase-go"
 )
 
 func main() {
+	// Local development reads .env; in production (Fly) env vars come from secrets.
+	// godotenv never overrides variables that are already set.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Fatalf("load .env: %v", err)
+	}
+
 	supabaseURL := os.Getenv("SUPABASE_URL")
 	supabaseKey := os.Getenv("SUPABASE_SECRET_KEY")
 	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
@@ -23,7 +31,17 @@ func main() {
 		log.Printf("GITHUB_WEBHOOK_SECRET not set; webhook signatures will not be verified")
 	}
 
+	corsOrigins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
+	for i := range corsOrigins {
+		corsOrigins[i] = strings.TrimSpace(corsOrigins[i])
+	}
+	if os.Getenv("CORS_ALLOWED_ORIGINS") == "" {
+		corsOrigins = []string{"*"}
+	}
+
 	r := gin.Default()
+	r.Use(corsMiddleware(corsOrigins))
+	registerAPI(r, client)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

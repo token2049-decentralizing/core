@@ -1,31 +1,63 @@
-import { Geist, Geist_Mono, JetBrains_Mono, Merriweather } from "next/font/google"
+import { JetBrains_Mono, Merriweather } from "next/font/google"
+import type { Metadata } from "next"
+import { cookies } from "next/headers"
 
 import "./globals.css"
+import { AppSidebar } from "@/components/app-sidebar"
+import { AppToolbar } from "@/components/app-toolbar"
 import { ThemeProvider } from "@/components/theme-provider"
-import { cn } from "@/lib/utils";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 
-const merriweatherHeading = Merriweather({subsets:['latin'],variable:'--font-heading'});
-
-const fontSans = Geist({
+const merriweatherHeading = Merriweather({
   subsets: ["latin"],
-  variable: "--font-sans",
+  variable: "--font-heading",
 })
 
-const jetbrainsMono = JetBrains_Mono({subsets:['latin'],variable:'--font-mono'})
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+})
 
-export default function RootLayout({
+export const metadata: Metadata = {
+  title: { default: "cre-runner", template: "%s | cre-runner" },
+  description: "GitHub activity and PR reward campaigns",
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const cookieStore = await cookies()
+  const sidebarOpen = cookieStore.get("sidebar_state")?.value !== "false"
+
   return (
     <html
       lang="en"
       suppressHydrationWarning
-      className={cn("antialiased", fontSans.variable, "font-mono", jetbrainsMono.variable, merriweatherHeading.variable)}
+      className={cn(
+        "antialiased",
+        "font-mono",
+        jetbrainsMono.variable,
+        merriweatherHeading.variable
+      )}
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <TooltipProvider>
+            <SidebarProvider defaultOpen={sidebarOpen}>
+              <AppSidebar />
+              <SidebarInset>
+                <AppToolbar />
+                <div className="flex flex-1 flex-col">{children}</div>
+              </SidebarInset>
+            </SidebarProvider>
+            <Toaster position="bottom-right" />
+          </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   )
