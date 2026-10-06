@@ -2,11 +2,25 @@
 # CRE PROJECT SETTINGS FILE
 # ==========================================================================
 # Per-target CLI settings. Targets themselves are defined in test-workflow/workflow.yaml.
-# The workflow uses no chain RPCs yet. When Solana settlement lands, add e.g.:
 #
-# production-settings:
-#   rpcs:
-#     - chain-name: <solana devnet chain name from `cre workflow supported-chains`>
-#       url: https://rpc.example.com/${CRE_SECRET_RPC_SOLANA}
+# `cre workflow simulate` requires at least one chain RPC per target, even though the
+# workflow does not read any chain yet. Sepolia (public RPC) satisfies that; it is unused.
+# When Solana settlement lands, add the Solana devnet RPC here (name from
+# `cre workflow supported-chains`) and drop Sepolia.
 #
 # RPC URLs support ${VAR_NAME} so secrets stay out of this committed file.
+
+local-simulation:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://ethereum-sepolia-rpc.publicnode.com
+
+docker-simulation:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://ethereum-sepolia-rpc.publicnode.com
+
+production-settings:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://ethereum-sepolia-rpc.publicnode.com
