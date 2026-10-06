@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/repos/:owner/:repo/filters", a.repoFilters)
 	g.GET("/repos/:owner/:repo/events", a.listRepoEvents)
 	g.GET("/deliveries/:delivery_id", a.getDelivery)
+	g.GET("/campaigns", a.listCampaigns)
 	g.POST("/campaigns", a.createCampaign)
 }
 
@@ -296,6 +298,11 @@ func queryInt(c *gin.Context, name string, def, min, max int) (int, error) {
 	return n, nil
 }
 
+// isRangeError reports PostgREST's PGRST103, returned when offset is past the last row.
+func isRangeError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "PGRST103")
+}
+
 func (a *api) listRepoEvents(c *gin.Context) {
 	repo := c.Param("owner") + "/" + c.Param("repo")
 
@@ -341,7 +348,7 @@ func (a *api) listRepoEvents(c *gin.Context) {
 		Order("id", &postgrest.OrderOpts{Ascending: false}).
 		Range(from, from+pageSize-1, "").
 		ExecuteTo(&rows)
-	if err != nil && strings.Contains(err.Error(), "PGRST103") {
+	if isRangeError(err) {
 		// Offset past the last row: PostgREST rejects the range, so return an empty page.
 		rows = nil
 		_, total, err = filter("id", true).Execute()
@@ -588,4 +595,111 @@ func (a *api) createCampaign(c *gin.Context) {
 	reposJSON, _ := json.Marshal(repos)
 	created[0]["repos"] = reposJSON
 	c.JSON(http.StatusCreated, gin.H{"data": created[0]})
+}
+
+// GET /api/campaigns
+
+var campaignStatuses = []string{"draft", "active", "paused", "ended"}
+
+func (a *api) listCampaigns(c *gin.Context) {
+	page, err := queryInt(c, "page", 0, 0, 1_000_000)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	pageSize, err := queryInt(c, "page_size", defaultPageSize, 1, maxPageSize)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	status := c.Query("status")
+	if status != "" && !slices.Contains(campaignStatuses, status) {
+		apiError(c, http.StatusBadRequest, "status must be one of "+strings.Join(campaignStatuses, ", "))
+		return
+	}
+	repo := c.Query("repo")
+	if repo != "" && !repoFullNameRe.MatchString(repo) {
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	}
+
+	// Filter by repo in a separate query so each campaign still lists all its repos.
+	var ids []string
+	if repo != "" {
+		var links []campaignRepoInsert
+		if _, err := a.db.From("campaign_repos").
+			Select("campaign_id", "", false).
+			Eq("repository_full_name", repo).
+			ExecuteTo(&links); err != nil {
+			internalError(c, "load campaigns", err)
+			return
+		}
+		if len(links) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"data":       []any{},
+				"pagination": gin.H{"page": page, "page_size": pageSize, "total": 0, "has_more": false},
+			})
+			return
+		}
+		for _, l := range links {
+			ids = append(ids, l.CampaignID)
+		}
+	}
+
+	filter := func(columns string, head bool) *postgrest.FilterBuilder {
+		q := a.db.From("campaigns").Select(columns, "exact", head)
+		if status != "" {
+			q = q.Eq("status", status)
+		}
+		if ids != nil {
+			q = q.In("id", ids)
+		}
+		return q
+	}
+
+	var rows []map[string]json.RawMessage
+	from := page * pageSize
+	total, err := filter("*,campaign_repos(repository_full_name)", false).
+		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
+		Order("id", &postgrest.OrderOpts{Ascending: true}).
+		Range(from, from+pageSize-1, "").
+		ExecuteTo(&rows)
+	if isRangeError(err) {
+		rows = nil
+		_, total, err = filter("id", true).Execute()
+	}
+	if err != nil {
+		internalError(c, "load campaigns", err)
+		return
+	}
+
+	for _, row := range rows {
+		var links []struct {
+			RepositoryFullName string `json:"repository_full_name"`
+		}
+		if err := json.Unmarshal(row["campaign_repos"], &links); err != nil {
+			internalError(c, "load campaigns", err)
+			return
+		}
+		repos := make([]string, len(links))
+		for i, l := range links {
+			repos[i] = l.RepositoryFullName
+		}
+		sort.Strings(repos)
+		delete(row, "campaign_repos")
+		row["repos"], _ = json.Marshal(repos)
+	}
+	if rows == nil {
+		rows = []map[string]json.RawMessage{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": rows,
+		"pagination": gin.H{
+			"page":      page,
+			"page_size": pageSize,
+			"total":     total,
+			"has_more":  int64(from+len(rows)) < total,
+		},
+	})
 }

@@ -16,7 +16,8 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 2 | GET  | `/api/repos/{owner}/{repo}/filters` | 某个仓库可用的过滤项 |
 | 3 | GET  | `/api/repos/{owner}/{repo}/events` | 某个仓库的事件列表（分页，按时间倒序） |
 | 4 | GET  | `/api/deliveries/{delivery_id}` | 单个 delivery 的完整信息 |
-| 5 | POST | `/api/campaigns` | 创建 reward campaign，可附带仓库 |
+| 5 | GET  | `/api/campaigns` | campaign 列表（分页，按创建时间倒序） |
+| 6 | POST | `/api/campaigns` | 创建 reward campaign，可附带仓库 |
 
 错误码：
 
@@ -358,7 +359,81 @@ curl https://cre-runner.fly.dev/api/deliveries/2f1459e0-c1aa-11f1-9a98-b70712a5a
 
 ---
 
-## 5. 创建 campaign
+## 5. campaign 列表
+
+`GET /api/campaigns`
+
+按创建时间从新到旧分页返回 campaign，每个 campaign 附带它 attach 的全部仓库。
+
+**查询参数**
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `page` | int | `0` | 页码，从 0 开始 |
+| `page_size` | int | `20` | 每页条数，1–100 |
+| `status` | string | – | 按状态过滤：`draft` / `active` / `paused` / `ended` |
+| `repo` | string | – | 只返回 attach 了该仓库（`owner/repo`）的 campaign |
+
+过滤条件之间为 AND 关系。按 `repo` 过滤时，返回的 `repos` 仍是该 campaign 的完整仓库列表。
+
+**请求示例**
+
+```bash
+# 默认：最新 20 个
+curl https://cre-runner.fly.dev/api/campaigns
+
+# 某个仓库参与的进行中 campaign
+curl "https://cre-runner.fly.dev/api/campaigns?status=active&repo=octo-org/hello-world"
+```
+
+**响应 200**
+
+```json
+{
+  "data": [
+    {
+      "id": "6f1c2a9e-3b7d-4c1e-9a55-0d2f8b7e4c11",
+      "name": "CodeRabbit OSS Challenge",
+      "description": "Reward merged PRs that fix linked issues.",
+      "sponsor": "Example Developer Tool",
+      "reward_asset": "USDC",
+      "budget": 10000.000000,
+      "max_reward_per_pr": 500.000000,
+      "min_score": 70,
+      "eligibility": { "merged": true, "ci_passed": true, "linked_issue": true, "duplicate": false },
+      "scoring": { "issue_relevance": 20, "correctness": 25, "tests": 15, "code_quality": 15, "maintainer_review": 15, "novelty": 10 },
+      "status": "active",
+      "treasury_address": null,
+      "starts_at": "2026-10-10T00:00:00+00:00",
+      "ends_at": "2026-12-31T23:59:59+00:00",
+      "created_at": "2026-10-07T09:12:33.456+00:00",
+      "repos": ["octo-org/docs", "octo-org/hello-world"]
+    }
+  ],
+  "pagination": {
+    "page": 0,
+    "page_size": 20,
+    "total": 1,
+    "has_more": false
+  }
+}
+```
+
+campaign 字段含义见接口 6 的请求体和响应说明；`repos` 按字母序排列。`pagination` 含义同接口 3，页码超出范围时返回空 `data`。
+
+**响应 400 示例**
+
+```json
+{ "error": "status must be one of draft, active, paused, ended" }
+```
+
+```json
+{ "error": "repo must be owner/repo" }
+```
+
+---
+
+## 6. 创建 campaign
 
 `POST /api/campaigns`
 
