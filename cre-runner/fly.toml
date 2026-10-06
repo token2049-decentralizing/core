@@ -1,14 +1,12 @@
-# fly.toml app configuration file generated for core-pxf95g on 2026-10-06T14:44:35Z
+# fly.toml app configuration file generated for cre-runner on 2026-10-06T14:47:51Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'core-pxf95g'
+app = 'cre-runner'
 primary_region = 'sin'
 
 [build]
-  [build.args]
-    GO_VERSION = '1.26.2'
 
 [env]
   PORT = '8080'
