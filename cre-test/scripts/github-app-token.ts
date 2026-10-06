@@ -44,7 +44,7 @@ if (import.meta.main) {
   const jwt = appJwt(need("GITHUB_APP_ID"), readFileSync(need("GITHUB_APP_PRIVATE_KEY_PATH"), "utf8"));
 
   const installationId =
-    process.env.GITHUB_APP_INSTALLATION_ID ?? (await gh(`/repos/${need("GITHUB_APP_REPO")}/installation`, jwt)).id;
+    process.env.GITHUB_APP_INSTALLATION_ID || (await gh(`/repos/${need("GITHUB_APP_REPO")}/installation`, jwt)).id;
 
   const { token } = await gh(`/app/installations/${installationId}/access_tokens`, jwt, { permissions: READ_ONLY });
   process.stdout.write(token);
