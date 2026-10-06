@@ -1,0 +1,10 @@
+✓ Workflow compiled
+✓ Parsed JSON input successfully
+✓ Created HTTP trigger payload with 5 fields
+2026-10-06T23:11:59Z [SIMULATION] Simulator Initialized
+
+2026-10-06T23:11:59Z [SIMULATION] Running trigger trigger=http-trigger@1.0.0-alpha
+2026-10-06T23:11:59Z [USER LOG] evaluating token2049-decentralizing/core#1 (opened)
+2026-10-06T23:11:59Z [SIMULATION] Received interrupt signal, stopping execution
+2026-10-06T23:11:59Z [SIMULATION] Skipping WorkflowEngineV2
+✗ workflow execution failed: [2]Unknown: GitHub /repos/token2049-decentralizing/core/pulls/1 -> HTTP 401

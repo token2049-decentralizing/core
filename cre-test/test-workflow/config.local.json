@@ -1,5 +1,5 @@
 {
-  "mode": "production",
+  "mode": "simulation",
   "authorizedKeys": [],
   "githubApiUrl": "https://api.github.com",
   "campaign": {
