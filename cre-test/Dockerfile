@@ -30,9 +30,10 @@ COPY --from=build /usr/local/bin/cre /usr/local/bin/cre
 COPY --from=build /out/runner /usr/local/bin/runner
 
 WORKDIR /app
-COPY project.yaml secrets.yaml .env.public ./
-COPY test-workflow/workflow.yaml test-workflow/config.staging.json test-workflow/config.production.json test-workflow/
-COPY --from=build /out/workflow.wasm build/workflow.wasm
+# Owned by app: host files may be 0600 (e.g. from cre init) and must stay readable.
+COPY --chown=app:app project.yaml secrets.yaml .env.public ./
+COPY --chown=app:app test-workflow/workflow.yaml test-workflow/config.staging.json test-workflow/config.production.json test-workflow/
+COPY --chown=app:app --from=build /out/workflow.wasm build/workflow.wasm
 
 USER app
 ENV PORT=8080 \
