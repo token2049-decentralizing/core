@@ -1,5 +1,5 @@
 {
-  "mode": "production",
+  "mode": "simulation",
   "authorizedKeys": [],
   "githubApiUrl": "https://api.github.com",
   "campaign": {
@@ -23,11 +23,11 @@
   },
   "reviewers": {
     "codeReviewer": {
-      "url": "",
+      "url": "http://reviewer:8090/review/code",
       "secretId": "REVIEWER_TOKEN"
     },
     "llm": {
-      "url": "",
+      "url": "http://reviewer:8090/review/issue",
       "secretId": "REVIEWER_TOKEN"
     }
   }

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/smartcontractkit/cre-sdk-go/capabilities/networking/http"
 	"github.com/smartcontractkit/cre-sdk-go/cre"
@@ -86,9 +87,6 @@ type ghReview struct {
 	State string `json:"state"`
 	User  ghUser `json:"user"`
 }
-type ghFile struct {
-	Filename string `json:"filename"`
-}
 type ghCheckRuns struct {
 	CheckRuns []checkRun `json:"check_runs"`
 }
@@ -99,18 +97,90 @@ type githubFetcher struct {
 	token string
 }
 
+func (g githubFetcher) headers(extra ...string) map[string]*http.HeaderValues {
+	h := map[string]*http.HeaderValues{
+		"Accept":               {Values: []string{"application/vnd.github+json"}},
+		"Authorization":        {Values: []string{"Bearer " + g.token}},
+		"User-Agent":           {Values: []string{"contriboracle"}},
+		"X-GitHub-Api-Version": {Values: []string{"2022-11-28"}},
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		h[extra[i]] = &http.HeaderValues{Values: []string{extra[i+1]}}
+	}
+	return h
+}
+
 // get starts a request; the call runs while other requests are in flight.
 func (g githubFetcher) get(path string) cre.Promise[*http.Response] {
+	return g.sr.SendRequest(&http.Request{Url: g.api + path, Method: "GET", MultiHeaders: g.headers()})
+}
+
+// Paths only. The REST files endpoint returns every patch and can exceed the HTTP response limit.
+const filesQuery = `query($owner:String!,$name:String!,$number:Int!,$after:String){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){
+    files(first:100,after:$after){nodes{path} pageInfo{hasNextPage endCursor}}}}}`
+
+const maxFilePages = 5 // 500 files is plenty to spot tests.
+
+type ghFilesPage struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				Files struct {
+					Nodes []struct {
+						Path string `json:"path"`
+					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"files"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+func (g githubFetcher) filesPage(repository string, pr int, after string) cre.Promise[*http.Response] {
+	owner, name, _ := strings.Cut(repository, "/")
+	vars := map[string]any{"owner": owner, "name": name, "number": pr}
+	if after != "" {
+		vars["after"] = after
+	}
+	body, _ := json.Marshal(map[string]any{"query": filesQuery, "variables": vars})
 	return g.sr.SendRequest(&http.Request{
-		Url:    g.api + path,
-		Method: "GET",
-		Headers: map[string]string{
-			"Accept":               "application/vnd.github+json",
-			"Authorization":        "Bearer " + g.token,
-			"User-Agent":           "contriboracle",
-			"X-GitHub-Api-Version": "2022-11-28",
-		},
+		Url:          g.api + "/graphql",
+		Method:       "POST",
+		MultiHeaders: g.headers("Content-Type", "application/json"),
+		Body:         body,
 	})
+}
+
+// testsTouched pages through PR file paths until a test file is found.
+func (g githubFetcher) testsTouched(first cre.Promise[*http.Response], repository string, pr int) (bool, error) {
+	p := first
+	for range maxFilePages {
+		page, err := decode[ghFilesPage](p, "/graphql files")
+		if err != nil {
+			return false, err
+		}
+		if len(page.Errors) > 0 {
+			return false, fmt.Errorf("GitHub /graphql files: %s", page.Errors[0].Message)
+		}
+		files := page.Data.Repository.PullRequest.Files
+		for _, f := range files.Nodes {
+			if testFileRe.MatchString(f.Path) {
+				return true, nil
+			}
+		}
+		if !files.PageInfo.HasNextPage {
+			return false, nil
+		}
+		p = g.filesPage(repository, pr, files.PageInfo.EndCursor)
+	}
+	return false, nil
 }
 
 func decode[T any](p cre.Promise[*http.Response], path string) (T, error) {
@@ -145,22 +215,21 @@ func fetchGitHubEvidence(in evidenceInput, _ *slog.Logger, sr *http.SendRequeste
 		return "", err
 	}
 
-	// Needs head SHA from the PR, so these three start together after it.
-	// TODO: paginate if PRs exceed 100 files.
+	// Check runs need the head SHA, so these start together after the PR call.
 	reviewsPath := base + "/reviews?per_page=100"
-	filesPath := base + "/files?per_page=100"
 	checksPath := fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", in.Repository, pr.Head.SHA)
-	reviewsP, filesP, checksP := g.get(reviewsPath), g.get(filesPath), g.get(checksPath)
+	reviewsP, checksP := g.get(reviewsPath), g.get(checksPath)
+	filesP := g.filesPage(in.Repository, in.PRNumber, "")
 
 	reviews, err := decode[[]ghReview](reviewsP, reviewsPath)
 	if err != nil {
 		return "", err
 	}
-	files, err := decode[[]ghFile](filesP, filesPath)
+	checks, err := decode[ghCheckRuns](checksP, checksPath)
 	if err != nil {
 		return "", err
 	}
-	checks, err := decode[ghCheckRuns](checksP, checksPath)
+	testsTouched, err := g.testsTouched(filesP, in.Repository, in.PRNumber)
 	if err != nil {
 		return "", err
 	}
@@ -171,17 +240,11 @@ func fetchGitHubEvidence(in evidenceInput, _ *slog.Logger, sr *http.SendRequeste
 			approvers[r.User.Login] = true
 		}
 	}
-	testsTouched := false
-	for _, f := range files {
-		if testFileRe.MatchString(f.Filename) {
-			testsTouched = true
-			break
-		}
-	}
 	labels := []string{}
 	for _, l := range pr.Labels {
 		labels = append(labels, l.Name)
 	}
+	sort.Strings(labels) // Stable across nodes.
 
 	ev := GitHubEvidence{
 		Repository:      in.Repository,

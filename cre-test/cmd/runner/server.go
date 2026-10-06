@@ -19,19 +19,26 @@ const (
 	maxBodyBytes    = 64 << 10
 )
 
+type warmer interface {
+	Warm(ctx context.Context, req *evaluationRequest) error
+}
+
 type server struct {
 	secret    []byte
 	eval      evaluator
+	warm      warmer // Optional: reviewer cache warm-up before each simulation.
+	ledger    *ledger
 	admit     chan struct{} // running + queued; full -> 503
 	workers   chan struct{} // running simulations
 	queueWait time.Duration // max time queued before 503
 	log       *slog.Logger
 }
 
-func newServer(secret []byte, eval evaluator, concurrency, queue int, queueWait time.Duration, log *slog.Logger) *server {
+func newServer(secret []byte, eval evaluator, l *ledger, concurrency, queue int, queueWait time.Duration, log *slog.Logger) *server {
 	return &server{
 		secret:    secret,
 		eval:      eval,
+		ledger:    l,
 		admit:     make(chan struct{}, concurrency+queue),
 		workers:   make(chan struct{}, concurrency),
 		queueWait: queueWait,
@@ -77,6 +84,20 @@ func (s *server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Merged PRs: one settlement per PR. Retries get the recorded result back.
+	var entry *ledgerEntry
+	key := settlementKey(req)
+	if req.Event == "merged" {
+		entry = s.ledger.acquire(key)
+		defer entry.release()
+		if entry.res != nil {
+			s.log.Info("replayed settled result", "key", key)
+			w.Header().Set("X-ContribOracle-Replay", "true")
+			writeJSON(w, http.StatusOK, entry.res)
+			return
+		}
+	}
+
 	select {
 	case s.admit <- struct{}{}:
 		defer func() { <-s.admit }()
@@ -98,14 +119,27 @@ func (s *server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return // Caller gave up while queued.
 	}
 
-	payload, _ := json.Marshal(req) // Re-encoded: only validated fields reach the CLI.
 	start := time.Now()
-	res, err := s.eval.Evaluate(r.Context(), payload)
+	var res *evaluationResponse
+	if s.warm != nil {
+		err = s.warm.Warm(r.Context(), req)
+	}
+	if err == nil {
+		payload, _ := json.Marshal(req) // Re-encoded: only validated fields reach the CLI.
+		res, err = s.eval.Evaluate(r.Context(), payload)
+	}
 	log := s.log.With("repository", req.Repository, "pr", req.PRNumber, "event", req.Event, "ms", time.Since(start).Milliseconds())
 
 	var evalErr *evalError
 	switch {
 	case err == nil:
+		if entry != nil && res.Eligible && res.Reward != "0" {
+			if err := s.ledger.record(key, entry, res); err != nil {
+				log.Error("ledger write failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "runner error")
+				return
+			}
+		}
 		log.Info("evaluated", "score", res.Score, "eligible", res.Eligible)
 		writeJSON(w, http.StatusOK, res)
 	case errors.Is(err, context.DeadlineExceeded):

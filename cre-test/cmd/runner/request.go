@@ -12,6 +12,7 @@ type evaluationRequest struct {
 	PRNumber   int            `json:"pr_number"`
 	CampaignID string         `json:"campaign_id"`
 	Event      string         `json:"event"`
+	HeadSHA    string         `json:"head_sha,omitempty"`
 	Notes      map[string]any `json:"notes,omitempty"`
 }
 
@@ -23,7 +24,10 @@ type evaluationResponse struct {
 	PolicyHash     string `json:"policy_hash"`
 }
 
-var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var (
+	repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	shaRe  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
 
 // parseRequest rejects bad input before spending a simulation on it.
 func parseRequest(body []byte) (*evaluationRequest, error) {
@@ -44,6 +48,8 @@ func parseRequest(body []byte) (*evaluationRequest, error) {
 		return nil, errors.New("campaign_id is required")
 	case req.Event != "opened" && req.Event != "merged":
 		return nil, errors.New("event must be 'opened' or 'merged'")
+	case req.HeadSHA != "" && !shaRe.MatchString(req.HeadSHA):
+		return nil, errors.New("head_sha must be a 40-char lowercase hex commit SHA")
 	}
 	if n, ok := raw["notes"]; ok && string(n) == "null" {
 		return nil, errors.New("notes must be an object")

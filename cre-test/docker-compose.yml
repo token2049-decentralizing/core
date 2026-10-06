@@ -1,22 +1,50 @@
 # Reads values from .env in this folder (same file scripts/simulate.sh uses).
+x-github-app: &github-app
+  GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
+  GITHUB_APP_REPO: ${GITHUB_APP_REPO:-}
+  GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+  GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+
 services:
   runner:
     build: .
+    image: contriboracle:dev
     ports:
       - "${RUNNER_PORT:-8080}:8080"
     environment:
+      <<: *github-app
       CRE_API_KEY: ${CRE_API_KEY:-} # or use docker-compose.login.yml
       RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:?set RUNNER_SHARED_SECRET in .env}
       CRE_ETH_PRIVATE_KEY: ${CRE_ETH_PRIVATE_KEY:-0000000000000000000000000000000000000000000000000000000000000001}
-      GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
-      GITHUB_APP_REPO: ${GITHUB_APP_REPO:-}
-      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
-      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
-      CODE_REVIEWER_API_KEY_VALUE: ${CODE_REVIEWER_API_KEY_VALUE:-}
-      LLM_API_KEY_VALUE: ${LLM_API_KEY_VALUE:-}
+      REVIEWER_URL: http://reviewer:8090
+      REVIEWER_TOKEN_VALUE: ${REVIEWER_TOKEN:?set REVIEWER_TOKEN in .env}
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-2}
       MAX_QUEUE: ${MAX_QUEUE:-16}
       EVAL_TIMEOUT_SECONDS: ${EVAL_TIMEOUT_SECONDS:-120}
     volumes:
       - ${GITHUB_APP_PRIVATE_KEY_PATH:-./github-app.pem}:/run/secrets/github-app.pem:ro
+      - runner-data:/data # settlement ledger (replays duplicate "merged" calls)
+    depends_on:
+      - reviewer
     restart: unless-stopped
+
+  reviewer:
+    image: contriboracle:dev
+    entrypoint: ["reviewer"]
+    ports:
+      - "${REVIEWER_HOST_PORT:-8090}:8090" # token-protected; handy for checking the model
+    environment:
+      <<: *github-app
+      REVIEWER_TOKEN: ${REVIEWER_TOKEN:?set REVIEWER_TOKEN in .env}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://ark.ap-southeast.bytepluses.com/api/v3}
+      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY in .env}
+      LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in .env}
+      LLM_EXTRA_BODY: ${LLM_EXTRA_BODY:-}
+      LLM_JSON_MODE: ${LLM_JSON_MODE:-false}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+    volumes:
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:-./github-app.pem}:/run/secrets/github-app.pem:ro
+    restart: unless-stopped
+
+volumes:
+  runner-data:

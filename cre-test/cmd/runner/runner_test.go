@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,9 +16,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"contriboracle/internal/ghapp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +55,8 @@ func okEval(context.Context, []byte) (*evaluationResponse, error) {
 
 func newTestServer(fn func(context.Context, []byte) (*evaluationResponse, error), concurrency, queue int) *httptest.Server {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return httptest.NewServer(newServer([]byte(secret), fakeEval{fn}, concurrency, queue, time.Second, log).routes())
+	l, _ := openLedger("")
+	return httptest.NewServer(newServer([]byte(secret), fakeEval{fn}, l, concurrency, queue, time.Second, log).routes())
 }
 
 // post is safe to call from goroutines (uses assert, not require).
@@ -91,6 +95,7 @@ func TestParseRequest(t *testing.T) {
 		`{"repository":"a/b","pr_number":1,"campaign_id":"","event":"opened"}`,
 		`{"repository":"a/b","pr_number":1,"campaign_id":"c","event":"closed"}`,
 		`{"repository":"a/b","pr_number":1,"campaign_id":"c","event":"opened","notes":null}`,
+		`{"repository":"a/b","pr_number":1,"campaign_id":"c","event":"opened","head_sha":"xyz"}`,
 	} {
 		_, err := parseRequest([]byte(bad))
 		require.Error(t, err, bad)
@@ -121,11 +126,11 @@ func TestParseSimulateOutput(t *testing.T) {
 
 func TestChildEnvDropsRunnerSecrets(t *testing.T) {
 	env := childEnv([]string{
-		"PATH=/bin", "HOME=/home/app", "GOTOOLCHAIN=go1.25.3", "CRE_API_KEY=k", "LLM_API_KEY_VALUE=l",
+		"PATH=/bin", "HOME=/home/app", "GOTOOLCHAIN=go1.25.3", "CRE_API_KEY=k", "REVIEWER_TOKEN_VALUE=r",
 		"RUNNER_SHARED_SECRET=s", "GITHUB_APP_PRIVATE_KEY_PATH=/k.pem", "GITHUB_APP_ID=1", "GITHUB_TOKEN_VALUE=stale",
 	})
 	require.ElementsMatch(t, []string{
-		"PATH=/bin", "HOME=/home/app", "GOTOOLCHAIN=go1.25.3", "CRE_API_KEY=k", "LLM_API_KEY_VALUE=l",
+		"PATH=/bin", "HOME=/home/app", "GOTOOLCHAIN=go1.25.3", "CRE_API_KEY=k", "REVIEWER_TOKEN_VALUE=r",
 	}, env)
 }
 
@@ -241,8 +246,8 @@ func TestCLISimulator(t *testing.T) {
 	t.Setenv("RUNNER_SHARED_SECRET", "must-not-leak")
 	bin := fakeCLI(t, fixture(t, "success.txt"))
 	sim := &cliSimulator{
-		Bin: bin, Dir: t.TempDir(), Workflow: "test-workflow", Target: "staging-settings",
-		Wasm: "/app/build/workflow.wasm", Timeout: 10 * time.Second, Tokens: staticToken("ghs_abc"),
+		Bin: bin, Dir: t.TempDir(), Workflow: "test-workflow", Target: "local-simulation",
+		Wasm: "/app/build/workflow.wasm", Timeout: 10 * time.Second, Tokens: ghapp.Static("ghs_abc"),
 	}
 
 	res, err := sim.Evaluate(context.Background(), validBody)
@@ -250,7 +255,7 @@ func TestCLISimulator(t *testing.T) {
 	require.Equal(t, 30, res.Score)
 
 	args, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "args"))
-	require.Equal(t, strings.Join([]string{"workflow", "simulate", "test-workflow", "--target", "staging-settings",
+	require.Equal(t, strings.Join([]string{"workflow", "simulate", "test-workflow", "--target", "local-simulation",
 		"--non-interactive", "--trigger-index", "0", "--http-payload", string(validBody),
 		"--wasm", "/app/build/workflow.wasm"}, "\n")+"\n", string(args))
 
@@ -261,7 +266,7 @@ func TestCLISimulator(t *testing.T) {
 
 func TestCLISimulatorFailureAndMissingBinary(t *testing.T) {
 	sim := &cliSimulator{Bin: fakeCLI(t, fixture(t, "failure.txt")), Dir: t.TempDir(), Workflow: "w",
-		Target: "t", Timeout: 10 * time.Second, Tokens: staticToken("x")}
+		Target: "t", Timeout: 10 * time.Second, Tokens: ghapp.Static("x")}
 	_, err := sim.Evaluate(context.Background(), validBody)
 	var ee *evalError
 	require.ErrorAs(t, err, &ee)
@@ -271,4 +276,120 @@ func TestCLISimulatorFailureAndMissingBinary(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, strings.Contains(err.Error(), "no result"), err.Error())
 	require.NotErrorAs(t, err, &ee)
+}
+
+var mergedBody = []byte(`{"repository":"acme/pool","pr_number":7,"campaign_id":"c","event":"merged"}`)
+
+func eligibleEval(calls *atomic.Int32) func(context.Context, []byte) (*evaluationResponse, error) {
+	return func(context.Context, []byte) (*evaluationResponse, error) {
+		n := calls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return &evaluationResponse{Score: 90, Eligible: true, Reward: "450000000", EvaluationHash: fmt.Sprintf("0x%d", n)}, nil
+	}
+}
+
+func TestMergedIsSettledOnce(t *testing.T) {
+	var calls atomic.Int32
+	srv := newTestServer(eligibleEval(&calls), 4, 4)
+	defer srv.Close()
+
+	// Concurrent duplicates (webhook retries) wait for the first and get its result.
+	var wg sync.WaitGroup
+	hashes := make(chan any, 5)
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, out := post(t, srv.URL, mergedBody, sign(mergedBody))
+			assert.Equal(t, http.StatusOK, res.StatusCode)
+			hashes <- out["evaluation_hash"]
+		}()
+	}
+	wg.Wait()
+	close(hashes)
+	for h := range hashes {
+		require.Equal(t, "0x1", h)
+	}
+	require.Equal(t, int32(1), calls.Load())
+
+	res, _ := post(t, srv.URL, mergedBody, sign(mergedBody))
+	require.Equal(t, "true", res.Header.Get("X-ContribOracle-Replay"))
+
+	// "opened" is a preview and is never deduplicated.
+	opened := []byte(`{"repository":"acme/pool","pr_number":7,"campaign_id":"c","event":"opened"}`)
+	post(t, srv.URL, opened, sign(opened))
+	require.Equal(t, int32(2), calls.Load())
+}
+
+func TestIneligibleMergedIsNotRecorded(t *testing.T) {
+	var calls atomic.Int32
+	srv := newTestServer(func(context.Context, []byte) (*evaluationResponse, error) {
+		calls.Add(1)
+		return &evaluationResponse{Score: 40, Reward: "0", EvaluationHash: "0xa"}, nil
+	}, 1, 1)
+	defer srv.Close()
+
+	post(t, srv.URL, mergedBody, sign(mergedBody))
+	res, _ := post(t, srv.URL, mergedBody, sign(mergedBody))
+	require.Empty(t, res.Header.Get("X-ContribOracle-Replay"))
+	require.Equal(t, int32(2), calls.Load()) // Can be re-evaluated, e.g. after a late approval.
+}
+
+func TestLedgerPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	l, err := openLedger(path)
+	require.NoError(t, err)
+	req, _ := parseRequest(mergedBody)
+	e := l.acquire(settlementKey(req))
+	require.NoError(t, l.record(settlementKey(req), e, &evaluationResponse{Score: 90, Eligible: true, Reward: "1", EvaluationHash: "0xabc"}))
+	e.release()
+
+	reopened, err := openLedger(path)
+	require.NoError(t, err)
+	e = reopened.acquire(settlementKey(req))
+	defer e.release()
+	require.Equal(t, "0xabc", e.res.EvaluationHash)
+}
+
+func TestWarmsReviewersBeforeSimulating(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+	status := http.StatusOK
+	rev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer rev-token", r.Header.Get("Authorization"))
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		seen[r.URL.Path] = string(b)
+		mu.Unlock()
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"error":"llm down"}`)
+	}))
+	defer rev.Close()
+
+	var evals atomic.Int32
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	l, _ := openLedger("")
+	s := newServer([]byte(secret), fakeEval{func(ctx context.Context, p []byte) (*evaluationResponse, error) {
+		evals.Add(1)
+		return okEval(ctx, p)
+	}}, l, 1, 1, time.Second, log)
+	s.warm = &reviewWarmer{baseURL: rev.URL, token: "rev-token", personas: []string{"code", "issue"}, http: http.DefaultClient}
+	srv := httptest.NewServer(s.routes())
+	defer srv.Close()
+
+	sha := strings.Repeat("a", 40)
+	body := []byte(`{"repository":"acme/pool","pr_number":1,"campaign_id":"c","event":"opened","head_sha":"` + sha + `"}`)
+	res, _ := post(t, srv.URL, body, sign(body))
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, int32(1), evals.Load())
+	require.Len(t, seen, 2)
+	require.Contains(t, seen["/review/code"], sha)
+	require.Contains(t, seen["/review/issue"], `"pr_number":1`)
+
+	// Reviewer failure: 502 with its message, and no simulation is run.
+	status = http.StatusBadGateway
+	res, out := post(t, srv.URL, body, sign(body))
+	require.Equal(t, http.StatusBadGateway, res.StatusCode)
+	require.Contains(t, out["error"], "llm down")
+	require.Equal(t, int32(1), evals.Load())
 }

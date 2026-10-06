@@ -17,13 +17,22 @@ const apiURL = "https://api.github.test"
 const llmURL = "https://llm.test/score"
 
 func testConfig() *Config {
-	cfg := &Config{GitHubAPIURL: apiURL, Campaign: testPolicy}
-	cfg.Reviewers.CodeReviewer = ReviewerConfig{SecretID: "CODE_REVIEWER_API_KEY"}
-	cfg.Reviewers.LLM = ReviewerConfig{URL: llmURL, SecretID: "LLM_API_KEY"}
+	cfg := &Config{Mode: ModeSimulation, GitHubAPIURL: apiURL, Campaign: testPolicy}
+	cfg.Reviewers.CodeReviewer = ReviewerConfig{SecretID: "REVIEWER_TOKEN"}
+	cfg.Reviewers.LLM = ReviewerConfig{URL: llmURL, SecretID: "REVIEWER_TOKEN"}
 	return cfg
 }
 
-var testSecrets = testutils.Secrets{"main": {"GITHUB_TOKEN": "gh-token", "LLM_API_KEY": "llm-key"}}
+var testSecrets = testutils.Secrets{"main": {"GITHUB_TOKEN": "gh-token", "REVIEWER_TOKEN": "rev-token"}}
+
+const headSHA = "1111111111111111111111111111111111111111"
+
+func header(req *http.Request, name string) string {
+	if v := req.MultiHeaders[name]; v != nil && len(v.Values) > 0 {
+		return v.Values[0]
+	}
+	return ""
+}
 
 func jsonBody(t *testing.T, v any) *http.Response {
 	b, err := json.Marshal(v)
@@ -44,30 +53,54 @@ func mockAPIs(t *testing.T, llmScore int) *[]string {
 		mu.Unlock()
 
 		if req.Url == llmURL {
-			require.Equal(t, "Bearer llm-key", req.Headers["Authorization"])
-			require.NotContains(t, string(req.Body), "llm-key")
+			require.Equal(t, "Bearer rev-token", header(req, "Authorization"))
+			require.NotContains(t, string(req.Body), "rev-token")
+			require.False(t, req.CacheSettings.GetStore())
+			require.NotNil(t, req.Timeout)
 			return jsonBody(t, map[string]any{"score": llmScore}), nil
 		}
-		require.Equal(t, "Bearer gh-token", req.Headers["Authorization"])
+		require.Equal(t, "Bearer gh-token", header(req, "Authorization"))
 
 		path := strings.TrimPrefix(req.Url, apiURL)
 		switch {
 		case path == "/repos/acme/pool/pulls/102":
 			return jsonBody(t, map[string]any{
 				"user": map[string]any{"login": "alice"}, "title": "Fix connection pool race condition",
-				"body": "Fixes #384", "base": map[string]any{"sha": "b"}, "head": map[string]any{"sha": "h"},
-				"additions": 42, "deletions": 17, "changed_files": 3, "merged": true, "labels": []any{},
+				"body": "Fixes #384", "base": map[string]any{"sha": "b"}, "head": map[string]any{"sha": headSHA},
+				"additions": 42, "deletions": 17, "changed_files": 3, "merged": true,
+				"labels": []any{map[string]any{"name": "zeta"}, map[string]any{"name": "alpha"}},
 			}), nil
 		case strings.HasPrefix(path, "/repos/acme/pool/pulls/102/reviews"):
 			return jsonBody(t, []any{map[string]any{"state": "APPROVED", "user": map[string]any{"login": "bob"}}}), nil
-		case strings.HasPrefix(path, "/repos/acme/pool/pulls/102/files"):
-			return jsonBody(t, []any{map[string]any{"filename": "src/pool.go"}, map[string]any{"filename": "src/pool_test.go"}}), nil
-		case strings.HasPrefix(path, "/repos/acme/pool/commits/h/check-runs"):
+		case path == "/graphql":
+			require.Equal(t, "POST", req.Method)
+			var q struct {
+				Variables map[string]any `json:"variables"`
+			}
+			require.NoError(t, json.Unmarshal(req.Body, &q))
+			require.Equal(t, "acme", q.Variables["owner"])
+			// Page 1 has no tests; page 2 does: proves pagination.
+			if q.Variables["after"] == nil {
+				return jsonBody(t, filesPage([]string{"src/pool.go"}, true, "c1")), nil
+			}
+			require.Equal(t, "c1", q.Variables["after"])
+			return jsonBody(t, filesPage([]string{"src/pool_test.go"}, false, "")), nil
+		case strings.HasPrefix(path, "/repos/acme/pool/commits/"+headSHA+"/check-runs"):
 			return jsonBody(t, map[string]any{"check_runs": []any{map[string]any{"status": "completed", "conclusion": "success"}}}), nil
 		}
 		return &http.Response{StatusCode: 404, Body: []byte(`{}`)}, nil
 	}
 	return urls
+}
+
+func filesPage(paths []string, more bool, cursor string) map[string]any {
+	nodes := []any{}
+	for _, p := range paths {
+		nodes = append(nodes, map[string]any{"path": p})
+	}
+	return map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+		"files": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": more, "endCursor": cursor}},
+	}}}}
 }
 
 func payload(t *testing.T, v any) *http.Payload {
@@ -145,6 +178,37 @@ func TestUnknownCampaign(t *testing.T) {
 	req["campaign_id"] = "other"
 	_, _, err := run(t, req)
 	require.ErrorContains(t, err, "unknown campaign")
+}
+
+func TestHeadSHAPinning(t *testing.T) {
+	mockAPIs(t, 91)
+	req := request("merged")
+	req["head_sha"] = headSHA
+	_, _, err := run(t, req)
+	require.NoError(t, err)
+
+	req["head_sha"] = strings.Repeat("2", 40)
+	_, _, err = run(t, req)
+	require.ErrorContains(t, err, "PR head moved")
+}
+
+func TestGraphQLErrorsSurface(t *testing.T) {
+	mock, err := httpmock.NewClientCapability(t)
+	require.NoError(t, err)
+	mock.SendRequest = func(_ context.Context, req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.Url, "/graphql") {
+			return jsonBody(t, map[string]any{"errors": []any{map[string]any{"message": "Resource not accessible"}}}), nil
+		}
+		if strings.HasSuffix(req.Url, "/pulls/102") {
+			return jsonBody(t, map[string]any{"head": map[string]any{"sha": headSHA}}), nil
+		}
+		if strings.Contains(req.Url, "/check-runs") {
+			return jsonBody(t, map[string]any{"check_runs": []any{}}), nil
+		}
+		return jsonBody(t, []any{}), nil // reviews
+	}
+	_, _, err = run(t, request("opened"))
+	require.ErrorContains(t, err, "Resource not accessible")
 }
 
 func TestEmptySecretFailsClearly(t *testing.T) {

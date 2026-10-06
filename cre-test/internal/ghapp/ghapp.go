@@ -185,3 +185,24 @@ func (m *Minter) call(ctx context.Context, method, path, jwt string, body, out a
 	}
 	return json.Unmarshal(raw, out)
 }
+
+// TokenSource yields a GitHub token for API calls.
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+}
+
+// Static is a fixed token (dev fallback: a personal fine-grained token).
+type Static string
+
+func (s Static) Token(context.Context) (string, error) { return string(s), nil }
+
+// SourceFromEnv prefers the GitHub App; GITHUB_TOKEN_VALUE is the dev fallback.
+func SourceFromEnv() (TokenSource, error) {
+	if os.Getenv("GITHUB_APP_ID") != "" {
+		return FromEnv()
+	}
+	if t := os.Getenv("GITHUB_TOKEN_VALUE"); t != "" {
+		return Static(t), nil
+	}
+	return nil, errors.New("set GITHUB_APP_* vars (or GITHUB_TOKEN_VALUE for dev)")
+}

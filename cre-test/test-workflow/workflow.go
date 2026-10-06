@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"math/big"
 
 	"github.com/smartcontractkit/cre-sdk-go/capabilities/networking/http"
@@ -31,19 +30,30 @@ func InitWorkflow(config *Config, _ *slog.Logger, _ cre.SecretsProvider) (cre.Wo
 
 func validateConfig(c *Config) error {
 	switch {
+	case c.Mode != ModeSimulation && c.Mode != ModeProduction:
+		return fmt.Errorf("mode must be %q or %q", ModeSimulation, ModeProduction)
 	case c.GitHubAPIURL == "":
 		return errors.New("githubApiUrl is required")
 	case c.Campaign.ID == "":
 		return errors.New("campaign.id is required")
 	}
-	switch c.Campaign.Reward.Model {
-	case "fixed", "score_based", "tiered":
-	default:
-		return fmt.Errorf("unknown reward model %q", c.Campaign.Reward.Model)
-	}
 	w := c.Campaign.Weights
-	if math.Abs(w.Evidence+w.CodeReviewer+w.LLM-1) > 1e-9 {
-		return errors.New("campaign.weights must sum to 1")
+	if w.Evidence < 0 || w.CodeReviewer < 0 || w.LLM < 0 || w.Evidence+w.CodeReviewer+w.LLM != 10000 {
+		return errors.New("campaign.weights must be non-negative basis points summing to 10000")
+	}
+	// Parse every amount now so a bad policy fails at startup, not at payout.
+	for _, score := range []int{0, 50, 100} {
+		if _, err := rewardBaseUnits(score, c.Campaign); err != nil {
+			return fmt.Errorf("campaign.reward: %w", err)
+		}
+	}
+	if c.Mode == ModeProduction {
+		switch {
+		case len(c.AuthorizedKeys) == 0:
+			return errors.New("production needs authorizedKeys: deployed HTTP triggers only accept signed requests")
+		case c.Reviewers.CodeReviewer.URL == "" || c.Reviewers.LLM.URL == "":
+			return errors.New("production needs real reviewer URLs (stub scores are simulation-only)")
+		}
 	}
 	return nil
 }
@@ -110,6 +120,9 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 	if err := json.Unmarshal([]byte(evidenceJSON), &evidence); err != nil {
 		return "", err
 	}
+	if req.HeadSHA != "" && req.HeadSHA != evidence.HeadSHA {
+		return "", fmt.Errorf("PR head moved: requested %s, current %s", req.HeadSHA, evidence.HeadSHA)
+	}
 
 	codeCall, err := reviewer(runtime, cfg.Reviewers.CodeReviewer)
 	if err != nil {
@@ -139,7 +152,9 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 	eligible := isEligible(evidence, score, cfg.Campaign)
 	reward := big.NewInt(0)
 	if eligible {
-		reward = toBaseUnits(rewardAmount(score, cfg.Campaign), cfg.Campaign.TokenDecimals)
+		if reward, err = rewardBaseUnits(score, cfg.Campaign); err != nil {
+			return "", err
+		}
 	}
 
 	pHash, err := policyHash(cfg.Campaign)

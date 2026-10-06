@@ -1,35 +1,36 @@
 # ==========================================================================
 # CRE WORKFLOW SETTINGS FILE
 # ==========================================================================
-# Workflow-specific settings for CRE CLI targets.
-# Each target defines user-workflow and workflow-artifacts groups.
-# Settings here override CRE Project Settings File values.
-#
-# Example custom target:
-# my-target:
-#   user-workflow:
-#     workflow-name: "MyExampleWorkflow"    # Required: Workflow Registry name
-#   workflow-artifacts:
-#     workflow-path: "."            # Path to workflow entry point
-#     config-path: "./config.yaml"          # Path to config file
-#     secrets-path: "../secrets.yaml"       # Path to secrets file (project root by default)
+# local-simulation   simulate on your machine (stub reviewers unless you set URLs)
+# docker-simulation  used by the runner image (reviewers at http://reviewer:8090)
+# production-settings deploy target; config validation refuses stubs and empty authorizedKeys
+# local/docker targets are never deployed.
 
 # ==========================================================================
-staging-settings:
+local-simulation:
   user-workflow:
-    workflow-name: "contriboracle-staging"
+    workflow-name: "contriboracle-local"
     deployment-registry: "private"
   workflow-artifacts:
     workflow-path: "."
-    config-path: "./config.staging.json"
+    config-path: "./config.local.json"
     secrets-path: "../secrets.yaml"
 
+# ==========================================================================
+docker-simulation:
+  user-workflow:
+    workflow-name: "contriboracle-docker"
+    deployment-registry: "private"
+  workflow-artifacts:
+    workflow-path: "."
+    config-path: "./config.docker.json"
+    secrets-path: "../secrets.yaml"
 
 # ==========================================================================
 production-settings:
   user-workflow:
     workflow-name: "contriboracle-production"
-    deployment-registry: "private"
+    # Before deploying, add: deployment-registry: "<id from `cre registry list`>"
   workflow-artifacts:
     workflow-path: "."
     config-path: "./config.production.json"

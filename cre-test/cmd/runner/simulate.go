@@ -11,15 +11,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"contriboracle/internal/ghapp"
 )
-
-type tokenSource interface {
-	Token(ctx context.Context) (string, error)
-}
-
-type staticToken string
-
-func (s staticToken) Token(context.Context) (string, error) { return string(s), nil }
 
 // evaluator runs one evaluation. Swapped for a fake in tests.
 type evaluator interface {
@@ -34,7 +28,7 @@ type cliSimulator struct {
 	Target   string
 	Wasm     string // prebuilt binary; without it parallel runs race on the CLI's temp file
 	Timeout  time.Duration
-	Tokens   tokenSource
+	Tokens   ghapp.TokenSource
 }
 
 // evalError is a failure inside the workflow (bad PR, GitHub error...), not in the runner.

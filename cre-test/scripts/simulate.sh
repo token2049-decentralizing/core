@@ -12,7 +12,8 @@ set -a; source .env; set +a
 GITHUB_TOKEN_VALUE="$(go run ./cmd/github-app-token)"
 export GITHUB_TOKEN_VALUE
 [ -n "$GITHUB_TOKEN_VALUE" ] || { echo "failed to mint GitHub token" >&2; exit 1; }
+export REVIEWER_TOKEN_VALUE="${REVIEWER_TOKEN:-}" # Workflow secret REVIEWER_TOKEN.
 
-cre workflow simulate test-workflow --target staging-settings \
+cre workflow simulate test-workflow --target "${CRE_TARGET:-local-simulation}" \
   --non-interactive --trigger-index 0 \
   --http-payload "$(cat "${payload}")"

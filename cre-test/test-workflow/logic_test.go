@@ -3,6 +3,7 @@ package main
 import (
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/smartcontractkit/cre-sdk-go/cre"
@@ -13,8 +14,8 @@ var testPolicy = CampaignPolicy{
 	ID:            "example-oss-2026",
 	TokenDecimals: 6,
 	Eligibility:   Eligibility{RequireMerged: true, RequireCIPassed: true, RequireLinkedIssue: true, MinScore: 70},
-	Weights:       Weights{Evidence: 0.4, CodeReviewer: 0.3, LLM: 0.3},
-	Reward:        RewardModel{Model: "score_based", Max: 500},
+	Weights:       Weights{Evidence: 4000, CodeReviewer: 3000, LLM: 3000},
+	Reward:        RewardModel{Model: "score_based", Max: "500"},
 }
 
 var goodEvidence = GitHubEvidence{
@@ -48,6 +49,11 @@ func TestParseRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, req.Notes)
 
+	sha := strings.Repeat("a", 40)
+	req, err = parseRequest([]byte(valid + `,"head_sha":"` + sha + `"}`))
+	require.NoError(t, err)
+	require.Equal(t, sha, req.HeadSHA)
+
 	for _, bad := range []string{
 		`{"repository":"nope","pr_number":1,"campaign_id":"c","event":"opened"}`,
 		`{"repository":"a/b","pr_number":-1,"campaign_id":"c","event":"opened"}`,
@@ -56,6 +62,8 @@ func TestParseRequest(t *testing.T) {
 		`{"repository":"a/b","pr_number":1,"campaign_id":"","event":"opened"}`,
 		valid + `,"notes":"text"}`,
 		valid + `,"notes":null}`,
+		valid + `,"head_sha":"abc"}`,
+		valid + `,"head_sha":"` + strings.Repeat("A", 40) + `"}`,
 		`[]`,
 	} {
 		_, err := parseRequest([]byte(bad))
@@ -91,21 +99,38 @@ func TestScoring(t *testing.T) {
 }
 
 func TestRewardModels(t *testing.T) {
-	require.Equal(t, 445.0, rewardAmount(89, testPolicy))
+	units := func(score int, p CampaignPolicy) string {
+		n, err := rewardBaseUnits(score, p)
+		require.NoError(t, err)
+		return n.String()
+	}
+	require.Equal(t, "445000000", units(89, testPolicy)) // 500 * 89 / 100 USDC
+
+	odd := testPolicy
+	odd.Reward = RewardModel{Model: "score_based", Max: "0.000003"} // 3 base units
+	require.Equal(t, "2", units(89, odd))                           // floors 2.67
 
 	fixed := testPolicy
-	fixed.Reward = RewardModel{Model: "fixed", MinScore: 80, Amount: 100}
-	require.Equal(t, 100.0, rewardAmount(85, fixed))
-	require.Equal(t, 0.0, rewardAmount(79, fixed))
+	fixed.Reward = RewardModel{Model: "fixed", MinScore: 80, Amount: "100"}
+	require.Equal(t, "100000000", units(85, fixed))
+	require.Equal(t, "0", units(79, fixed))
 
 	tiered := testPolicy
-	tiered.Reward = RewardModel{Model: "tiered", Tiers: []Tier{{MinScore: 70, Amount: 100}, {MinScore: 90, Amount: 500}}}
-	require.Equal(t, 500.0, rewardAmount(95, tiered))
-	require.Equal(t, 100.0, rewardAmount(75, tiered))
-	require.Equal(t, 0.0, rewardAmount(60, tiered))
+	tiered.Reward = RewardModel{Model: "tiered", Tiers: []Tier{{MinScore: 70, Amount: "100"}, {MinScore: 90, Amount: "500.5"}}}
+	require.Equal(t, "500500000", units(95, tiered))
+	require.Equal(t, "100000000", units(75, tiered))
+	require.Equal(t, "0", units(60, tiered))
+}
 
-	require.Equal(t, big.NewInt(445_000_000), toBaseUnits(445, 6))
-	require.Equal(t, big.NewInt(500_000), toBaseUnits(0.5, 6))
+func TestParseUnits(t *testing.T) {
+	n, err := parseUnits("1.5", 6)
+	require.NoError(t, err)
+	require.Equal(t, big.NewInt(1_500_000), n)
+
+	for _, bad := range []string{"", "-1", "1.2.3", "abc", ".5", "1.1234567", "1e3"} {
+		_, err := parseUnits(bad, 6)
+		require.Error(t, err, bad)
+	}
 }
 
 func TestCanonicalJSON(t *testing.T) {
@@ -114,27 +139,68 @@ func TestCanonicalJSON(t *testing.T) {
 	require.Equal(t, `{"a":{"c":"<&>","d":[2,1]},"b":1}`, string(b))
 }
 
-// Same hash the TypeScript version produced for config.staging.json.
-func TestPolicyHashMatchesConfig(t *testing.T) {
-	raw, err := os.ReadFile("config.staging.json")
-	require.NoError(t, err)
-	cfg, err := cre.ParseJSON[Config](raw)
-	require.NoError(t, err)
-	require.NoError(t, validateConfig(cfg))
+// Every committed config must load and validate (production only fails on its documented gaps).
+func TestCommittedConfigs(t *testing.T) {
+	for _, name := range []string{"config.local.json", "config.docker.json", "config.production.json"} {
+		raw, err := os.ReadFile(name)
+		require.NoError(t, err)
+		cfg, err := cre.ParseJSON[Config](raw)
+		require.NoError(t, err, name)
 
-	h, err := policyHash(cfg.Campaign)
-	require.NoError(t, err)
-	require.Equal(t, "0xbb5dc2d2ee4cfb3d3a20f48dc37c0a388e09e7e29576530d4c0e4f880e740ea1", h)
+		err = validateConfig(cfg)
+		if cfg.Mode == ModeProduction {
+			require.ErrorContains(t, err, "authorizedKeys", name)
+		} else {
+			require.NoError(t, err, name)
+		}
+	}
+}
+
+// policy_hash covers the exact campaign JSON, so equal policies hash equally across configs.
+func TestPolicyHashFromConfig(t *testing.T) {
+	hashOf := func(name string) string {
+		raw, err := os.ReadFile(name)
+		require.NoError(t, err)
+		cfg, err := cre.ParseJSON[Config](raw)
+		require.NoError(t, err)
+		h, err := policyHash(cfg.Campaign)
+		require.NoError(t, err)
+		return h
+	}
+	local := hashOf("config.local.json")
+	require.Regexp(t, `^0x[0-9a-f]{64}$`, local)
+	require.Equal(t, local, hashOf("config.docker.json"))
+	require.Equal(t, local, hashOf("config.production.json"))
 }
 
 func TestValidateConfig(t *testing.T) {
-	cfg := &Config{GitHubAPIURL: "x", Campaign: testPolicy}
-	require.NoError(t, validateConfig(cfg))
+	valid := func() *Config {
+		c := &Config{Mode: ModeSimulation, GitHubAPIURL: "x", Campaign: testPolicy}
+		return c
+	}
+	require.NoError(t, validateConfig(valid()))
 
-	cfg.Campaign.Reward.Model = "nope"
-	require.Error(t, validateConfig(cfg))
+	c := valid()
+	c.Mode = ""
+	require.ErrorContains(t, validateConfig(c), "mode")
 
-	cfg.Campaign = testPolicy
-	cfg.Campaign.Weights.LLM = 0.5
-	require.Error(t, validateConfig(cfg))
+	c = valid()
+	c.Campaign.Reward.Model = "nope"
+	require.Error(t, validateConfig(c))
+
+	c = valid()
+	c.Campaign.Reward.Max = "1.0000001" // more decimals than the token
+	require.ErrorContains(t, validateConfig(c), "decimals")
+
+	c = valid()
+	c.Campaign.Weights.LLM = 5000
+	require.ErrorContains(t, validateConfig(c), "10000")
+
+	c = valid()
+	c.Mode = ModeProduction
+	require.ErrorContains(t, validateConfig(c), "authorizedKeys")
+	c.AuthorizedKeys = []AuthorizedKey{{Type: "KEY_TYPE_ECDSA_EVM", PublicKey: "0xabc"}}
+	require.ErrorContains(t, validateConfig(c), "reviewer URLs")
+	c.Reviewers.CodeReviewer.URL, c.Reviewers.LLM.URL = "https://r/code", "https://r/issue"
+	require.NoError(t, validateConfig(c))
 }

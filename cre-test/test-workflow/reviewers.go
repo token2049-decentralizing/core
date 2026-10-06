@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"time"
 
 	"github.com/smartcontractkit/cre-sdk-go/capabilities/networking/http"
 	"github.com/smartcontractkit/cre-sdk-go/cre"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // reviewerRequestBody is sent to every reviewer. PR text is passed as data, never as instructions.
@@ -21,6 +23,9 @@ func reviewerRequestBody(e GitHubEvidence) map[string]any {
 		"untrusted":     map[string]any{"title": e.Title, "body": e.Body},
 	}
 }
+
+// Under the 10s simulator HTTP limit. The runner warms the reviewer cache first, so this is a cache hit.
+const reviewerTimeout = 9 * time.Second
 
 type reviewerCall struct {
 	URL    string // Empty = stub (uses StubScore).
@@ -45,10 +50,15 @@ func startReview(sr *http.SendRequester, c reviewerCall, body []byte) cre.Promis
 		return nil
 	}
 	return sr.SendRequest(&http.Request{
-		Url:     c.URL,
-		Method:  "POST",
-		Headers: map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + c.APIKey},
-		Body:    body,
+		Url:    c.URL,
+		Method: "POST",
+		MultiHeaders: map[string]*http.HeaderValues{
+			"Content-Type":  {Values: []string{"application/json"}},
+			"Authorization": {Values: []string{"Bearer " + c.APIKey}},
+		},
+		Body:          body,
+		Timeout:       durationpb.New(reviewerTimeout),
+		CacheSettings: &http.CacheSettings{Store: false}, // POST: never reuse a cached response.
 	})
 }
 

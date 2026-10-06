@@ -8,8 +8,9 @@ type EvaluationRequest struct {
 	Repository string         `json:"repository"` // "owner/repo"
 	PRNumber   int            `json:"pr_number"`
 	CampaignID string         `json:"campaign_id"`
-	Event      string         `json:"event"`           // "opened" | "merged"
-	Notes      map[string]any `json:"notes,omitempty"` // Free-form, untrusted. Never affects score or reward.
+	Event      string         `json:"event"`              // "opened" | "merged"
+	HeadSHA    string         `json:"head_sha,omitempty"` // Optional: fail if the PR head moved.
+	Notes      map[string]any `json:"notes,omitempty"`    // Free-form, untrusted. Never affects score or reward.
 }
 
 type EvaluationResponse struct {
@@ -20,18 +21,19 @@ type EvaluationResponse struct {
 	PolicyHash     string `json:"policy_hash"`
 }
 
+// Amounts are decimal strings in whole tokens ("500", "0.25"): no float math on money.
 type Tier struct {
-	MinScore int     `json:"minScore"`
-	Amount   float64 `json:"amount"`
+	MinScore int    `json:"minScore"`
+	Amount   string `json:"amount"`
 }
 
 // Model is "fixed" (MinScore, Amount), "score_based" (Max) or "tiered" (Tiers).
 type RewardModel struct {
-	Model    string  `json:"model"`
-	MinScore int     `json:"minScore,omitempty"`
-	Amount   float64 `json:"amount,omitempty"`
-	Max      float64 `json:"max,omitempty"`
-	Tiers    []Tier  `json:"tiers,omitempty"`
+	Model    string `json:"model"`
+	MinScore int    `json:"minScore,omitempty"`
+	Amount   string `json:"amount,omitempty"`
+	Max      string `json:"max,omitempty"`
+	Tiers    []Tier `json:"tiers,omitempty"`
 }
 
 type Eligibility struct {
@@ -41,10 +43,11 @@ type Eligibility struct {
 	MinScore           int  `json:"minScore"`
 }
 
-type Weights struct { // Must sum to 1.
-	Evidence     float64 `json:"evidence"`
-	CodeReviewer float64 `json:"codeReviewer"`
-	LLM          float64 `json:"llm"`
+// Weights in basis points; must sum to 10000.
+type Weights struct {
+	Evidence     int `json:"evidenceBps"`
+	CodeReviewer int `json:"codeReviewerBps"`
+	LLM          int `json:"llmBps"`
 }
 
 type CampaignPolicy struct {
@@ -76,7 +79,13 @@ type AuthorizedKey struct {
 	PublicKey string `json:"publicKey"`
 }
 
+const (
+	ModeSimulation = "simulation" // Local only: allows empty authorizedKeys and stub reviewers.
+	ModeProduction = "production" // Deployable: requires authorizedKeys and real reviewers.
+)
+
 type Config struct {
+	Mode           string          `json:"mode"`
 	AuthorizedKeys []AuthorizedKey `json:"authorizedKeys"`
 	GitHubAPIURL   string          `json:"githubApiUrl"`
 	Campaign       CampaignPolicy  `json:"campaign"`

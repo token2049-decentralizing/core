@@ -35,17 +35,6 @@ func envInt(key string, def int) int {
 	return n
 }
 
-// tokens prefers the GitHub App; a static GITHUB_TOKEN_VALUE is the dev fallback.
-func tokens() (tokenSource, error) {
-	if os.Getenv("GITHUB_APP_ID") != "" {
-		return ghapp.FromEnv()
-	}
-	if t := os.Getenv("GITHUB_TOKEN_VALUE"); t != "" {
-		return staticToken(t), nil
-	}
-	return nil, errors.New("set GITHUB_APP_* vars (or GITHUB_TOKEN_VALUE for dev)")
-}
-
 // creAuthMode reports what the cre CLI will use. CRE_API_KEY wins over a login session.
 func creAuthMode() string {
 	if os.Getenv("CRE_API_KEY") != "" {
@@ -64,7 +53,7 @@ func run(log *slog.Logger) error {
 	if len(secret) < 16 {
 		return errors.New("RUNNER_SHARED_SECRET must be at least 16 characters")
 	}
-	ts, err := tokens()
+	ts, err := ghapp.SourceFromEnv()
 	if err != nil {
 		return err
 	}
@@ -72,7 +61,7 @@ func run(log *slog.Logger) error {
 		Bin:      env("CRE_BIN", "cre"),
 		Dir:      env("CRE_PROJECT_DIR", "."),
 		Workflow: env("CRE_WORKFLOW", "test-workflow"),
-		Target:   env("CRE_TARGET", "staging-settings"),
+		Target:   env("CRE_TARGET", "local-simulation"),
 		Wasm:     os.Getenv("CRE_WASM"),
 		Timeout:  time.Duration(envInt("EVAL_TIMEOUT_SECONDS", 120)) * time.Second,
 		Tokens:   ts,
@@ -84,13 +73,26 @@ func run(log *slog.Logger) error {
 		concurrency = 1
 	}
 	queueWait := time.Duration(envInt("QUEUE_WAIT_SECONDS", 60)) * time.Second
-	srv := newServer([]byte(secret), sim, concurrency, envInt("MAX_QUEUE", 16), queueWait, log)
+	l, err := openLedger(os.Getenv("LEDGER_PATH"))
+	if err != nil {
+		return err
+	}
+	srv := newServer([]byte(secret), sim, l, concurrency, envInt("MAX_QUEUE", 16), queueWait, log)
+	reviewTimeout := time.Duration(envInt("REVIEW_TIMEOUT_SECONDS", 150)) * time.Second
+	if url := os.Getenv("REVIEWER_URL"); url != "" {
+		token := os.Getenv("REVIEWER_TOKEN_VALUE") // Same value the workflow uses as its REVIEWER_TOKEN secret.
+		if token == "" {
+			return errors.New("REVIEWER_URL set but REVIEWER_TOKEN_VALUE is empty")
+		}
+		srv.warm = &reviewWarmer{baseURL: url, token: token, personas: []string{"code", "issue"},
+			http: &http.Client{Timeout: reviewTimeout}}
+	}
 
 	httpSrv := &http.Server{
 		Addr:              ":" + env("PORT", "8080"),
 		Handler:           srv.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      queueWait + sim.Timeout + 10*time.Second, // Queueing + one evaluation.
+		WriteTimeout:      queueWait + reviewTimeout + sim.Timeout + 10*time.Second, // Queue + review + simulation.
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -98,7 +100,7 @@ func run(log *slog.Logger) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 	log.Info("runner listening", "addr", httpSrv.Addr, "workflow", sim.Workflow, "target", sim.Target,
-		"wasm", sim.Wasm, "cre_auth", creAuthMode())
+		"wasm", sim.Wasm, "cre_auth", creAuthMode(), "reviewer", os.Getenv("REVIEWER_URL"))
 
 	select {
 	case err := <-errCh:
