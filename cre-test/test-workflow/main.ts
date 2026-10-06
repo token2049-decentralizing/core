@@ -19,7 +19,11 @@ import type { Config, EvaluationResponse, GitHubEvidence, ReviewerConfig, Review
 
 export type { Config } from "./types";
 
-const secret = (runtime: Runtime<Config>, id: string): string => runtime.getSecret({ id }).result().value;
+const secret = (runtime: Runtime<Config>, id: string): string => {
+  const value = runtime.getSecret({ id }).result().value;
+  if (!value) throw new Error(`secret ${id} is empty (check .env / secrets.yaml)`);
+  return value;
+};
 
 const runReviewer = (
   runtime: Runtime<Config>,

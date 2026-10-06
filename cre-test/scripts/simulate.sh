@@ -11,6 +11,7 @@ set -a; source .env; set +a
 # Token only lives in this process's env; never written to disk.
 GITHUB_TOKEN_VALUE="$(bun scripts/github-app-token.ts)"
 export GITHUB_TOKEN_VALUE
+[ -n "$GITHUB_TOKEN_VALUE" ] || { echo "failed to mint GitHub token" >&2; exit 1; }
 
 cre workflow simulate test-workflow --target staging-settings \
   --non-interactive --trigger-index 0 \
