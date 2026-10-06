@@ -1,5 +1,4 @@
-*.env
+.env
 *.pem
 **/binary.wasm
 **/.cre_build_tmp.wasm
-build/
