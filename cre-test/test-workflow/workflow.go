@@ -34,17 +34,23 @@ func validateConfig(c *Config) error {
 		return fmt.Errorf("mode must be %q or %q", ModeSimulation, ModeProduction)
 	case c.GitHubAPIURL == "":
 		return errors.New("githubApiUrl is required")
-	case c.Campaign.ID == "":
-		return errors.New("campaign.id is required")
 	}
-	w := c.Campaign.Weights
+	w := c.Weights
 	if w.Evidence < 0 || w.CodeReviewer < 0 || w.LLM < 0 || w.Evidence+w.CodeReviewer+w.LLM != 10000 {
-		return errors.New("campaign.weights must be non-negative basis points summing to 10000")
+		return errors.New("weights must be non-negative basis points summing to 10000")
 	}
-	// Parse every amount now so a bad policy fails at startup, not at payout.
-	for _, score := range []int{0, 50, 100} {
-		if _, err := rewardBaseUnits(score, c.Campaign); err != nil {
-			return fmt.Errorf("campaign.reward: %w", err)
+	if c.CampaignAPIURL == "" {
+		switch {
+		case c.Campaign == nil || c.Campaign.ID == "":
+			return errors.New("set campaignApiUrl, or a static campaign for offline simulation")
+		case c.Mode == ModeProduction:
+			return errors.New("production needs campaignApiUrl (static campaigns are simulation-only)")
+		}
+		// Parse every amount now so a bad policy fails at startup, not at payout.
+		for _, score := range []int{0, 50, 100} {
+			if _, err := rewardBaseUnits(score, *c.Campaign); err != nil {
+				return fmt.Errorf("campaign.reward: %w", err)
+			}
 		}
 	}
 	if c.Mode == ModeProduction {
@@ -84,13 +90,6 @@ func providerName(name string, c reviewerCall) string {
 	return name
 }
 
-func policyHash(p CampaignPolicy) (string, error) {
-	if p.raw != nil {
-		return hashJSON(p.raw)
-	}
-	return hashJSON(p)
-}
-
 // onHTTPTrigger returns the EvaluationResponse as a JSON string.
 func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (string, error) {
 	logger := runtime.Logger()
@@ -98,16 +97,18 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 	if err != nil {
 		return "", err
 	}
-	if req.CampaignID != cfg.Campaign.ID {
-		return "", fmt.Errorf("unknown campaign %s", req.CampaignID)
+	logger.Info(fmt.Sprintf("evaluating %s#%d (%s) for campaign %s", req.Repository, req.PRNumber, req.Event, req.CampaignID))
+
+	client := &http.Client{}
+	policy, err := resolvePolicy(cfg, runtime, client, req)
+	if err != nil {
+		return "", err
 	}
-	logger.Info(fmt.Sprintf("evaluating %s#%d (%s)", req.Repository, req.PRNumber, req.Event))
 
 	token, err := secret(runtime, "GITHUB_TOKEN")
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{}
 
 	evidenceJSON, err := http.SendRequest(
 		evidenceInput{APIURL: cfg.GitHubAPIURL, Token: token, Repository: req.Repository, PRNumber: req.PRNumber},
@@ -148,16 +149,16 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 	codeReviewer := ReviewerResult{Provider: providerName("code-reviewer", codeCall), Score: scores.CodeReviewer}
 	llm := ReviewerResult{Provider: providerName("llm", llmCall), Score: scores.LLM}
 
-	score := aggregateScore(evScore, codeReviewer, llm, cfg.Campaign.Weights)
-	eligible := isEligible(evidence, score, cfg.Campaign)
+	score := aggregateScore(evScore, codeReviewer, llm, policy.Weights)
+	eligible := isEligible(evidence, score, policy)
 	reward := big.NewInt(0)
 	if eligible {
-		if reward, err = rewardBaseUnits(score, cfg.Campaign); err != nil {
+		if reward, err = rewardBaseUnits(score, policy); err != nil {
 			return "", err
 		}
 	}
 
-	pHash, err := policyHash(cfg.Campaign)
+	pHash, err := hashJSON(policy)
 	if err != nil {
 		return "", err
 	}

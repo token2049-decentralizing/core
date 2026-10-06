@@ -2,24 +2,11 @@
   "mode": "production",
   "authorizedKeys": [],
   "githubApiUrl": "https://api.github.com",
-  "campaign": {
-    "id": "example-oss-2026",
-    "tokenDecimals": 6,
-    "eligibility": {
-      "requireMerged": true,
-      "requireCiPassed": true,
-      "requireLinkedIssue": true,
-      "minScore": 70
-    },
-    "weights": {
-      "evidenceBps": 4000,
-      "codeReviewerBps": 3000,
-      "llmBps": 3000
-    },
-    "reward": {
-      "model": "score_based",
-      "max": "500"
-    }
+  "campaignApiUrl": "https://cre-runner.fly.dev",
+  "weights": {
+    "evidenceBps": 4000,
+    "codeReviewerBps": 3000,
+    "llmBps": 3000
   },
   "reviewers": {
     "codeReviewer": {

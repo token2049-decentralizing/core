@@ -1,7 +1,5 @@
 package main
 
-import "encoding/json"
-
 // Contract between the GitHub App and this workflow.
 
 type EvaluationRequest struct {
@@ -50,23 +48,14 @@ type Weights struct {
 	LLM          int `json:"llmBps"`
 }
 
+// CampaignPolicy is the policy one evaluation applies; policy_hash is its canonical hash.
 type CampaignPolicy struct {
 	ID            string      `json:"id"`
+	Asset         string      `json:"asset,omitempty"` // USDC | SOL
 	TokenDecimals int         `json:"tokenDecimals"`
 	Eligibility   Eligibility `json:"eligibility"`
-	Weights       Weights     `json:"weights"`
+	Weights       Weights     `json:"weights"` // Filled from Config.Weights.
 	Reward        RewardModel `json:"reward"`
-
-	raw json.RawMessage // Exact config JSON, used for policy_hash.
-}
-
-func (p *CampaignPolicy) UnmarshalJSON(b []byte) error {
-	type plain CampaignPolicy
-	if err := json.Unmarshal(b, (*plain)(p)); err != nil {
-		return err
-	}
-	p.raw = append(json.RawMessage(nil), b...)
-	return nil
 }
 
 type ReviewerConfig struct {
@@ -88,8 +77,11 @@ type Config struct {
 	Mode           string          `json:"mode"`
 	AuthorizedKeys []AuthorizedKey `json:"authorizedKeys"`
 	GitHubAPIURL   string          `json:"githubApiUrl"`
-	Campaign       CampaignPolicy  `json:"campaign"`
-	Reviewers      struct {
+	CampaignAPIURL string          `json:"campaignApiUrl"` // cre-runner; campaigns are fetched per evaluation
+	Weights        Weights         `json:"weights"`
+	// Static campaign for offline simulation/tests, used only when campaignApiUrl is empty.
+	Campaign  *CampaignPolicy `json:"campaign,omitempty"`
+	Reviewers struct {
 		CodeReviewer ReviewerConfig `json:"codeReviewer"`
 		LLM          ReviewerConfig `json:"llm"`
 	} `json:"reviewers"`

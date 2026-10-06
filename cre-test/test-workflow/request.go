@@ -9,6 +9,8 @@ import (
 var (
 	repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	shaRe  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// Campaign IDs are cre-runner UUIDs (or a slug for the static offline campaign).
+	campaignRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 )
 
 // parseRequest validates the raw trigger payload.
@@ -27,8 +29,8 @@ func parseRequest(input []byte) (*EvaluationRequest, error) {
 		return nil, errors.New("repository must be 'owner/repo'")
 	case req.PRNumber <= 0:
 		return nil, errors.New("pr_number must be a positive integer")
-	case req.CampaignID == "":
-		return nil, errors.New("campaign_id is required")
+	case !campaignRe.MatchString(req.CampaignID):
+		return nil, errors.New("campaign_id must be a campaign UUID")
 	case req.Event != "opened" && req.Event != "merged":
 		return nil, errors.New("event must be 'opened' or 'merged'")
 	case req.HeadSHA != "" && !shaRe.MatchString(req.HeadSHA):

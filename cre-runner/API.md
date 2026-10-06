@@ -19,14 +19,19 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 5 | GET  | `/api/campaigns` | campaign 列表（分页，按创建时间倒序） |
 | 6 | GET  | `/api/campaigns/{id}` | 单个 campaign 详情 |
 | 7 | POST | `/api/campaigns` | 创建 reward campaign，可附带仓库 |
+| 8 | POST | `/api/evaluations` | 手动触发一次 PR 评估（需要 `ADMIN_API_KEY`） |
+| 9 | GET  | `/api/evaluations` | 评估列表（分页，按时间倒序） |
+| 10 | GET | `/api/evaluations/{id}` | 单个评估详情 |
 
 错误码：
 
 | 状态码 | 含义 |
 |--------|------|
 | 400 | 参数不合法（`error` 中说明具体原因） |
+| 401 | 缺少或错误的 `Authorization: Bearer <ADMIN_API_KEY>`（仅接口 8） |
 | 404 | 仓库 / delivery / campaign 不存在 |
 | 500 | 服务端或数据库错误 |
+| 503 | 评估功能未开启（未设置 `EVALUATOR_URL`，仅接口 8） |
 
 ---
 
@@ -604,9 +609,105 @@ curl -X POST https://cre-runner.fly.dev/api/campaigns \
 
 ---
 
+## PR 评估（evaluations）
+
+cre-runner 把 PR 交给 CRE runner（`cre-test/cmd/runner`，`POST /evaluate`）评估：CRE workflow 读取 GitHub 证据、
+调用 LLM reviewer、按 campaign 规则打分并计算奖励。结果写入 `evaluations` 表。
+
+**自动触发（webhook）**：收到**签名校验通过**的 `pull_request` 事件后，对每个 **active** 且 attach 了该仓库的
+campaign 排队一次评估：
+
+| webhook | `event` | 说明 |
+|---------|---------|------|
+| `opened` / `reopened` / `synchronize` / `ready_for_review` | `opened` | 预览评分，不发奖励；draft PR 跳过 |
+| `closed` 且 `merged: true` | `merged` | 最终评估；符合条件时产生奖励 |
+
+同一 campaign + PR + commit（`head_sha`）+ `event` 只评估一次（GitHub 重投递会被去重）。
+未设置 `GITHUB_WEBHOOK_SECRET` 时不会自动评估。
+
+**状态**：`pending` → `running` → `done` / `failed`（失败原因在 `error`）。评估通常需要 30 秒以上（LLM review），
+前端请轮询接口 10。
+
+## 8. 手动触发评估
+
+`POST /api/evaluations`，请求头 `Authorization: Bearer <ADMIN_API_KEY>`。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `campaign_id` | string | 是 | – | campaign UUID |
+| `repository` | string | 是 | – | `owner/repo` |
+| `pr_number` | int | 是 | – | PR 编号 |
+| `event` | string | 否 | `"opened"` | `"opened"`（预览）或 `"merged"`（最终） |
+| `head_sha` | string | 否 | – | 40 位 commit SHA；PR head 已变化时评估失败 |
+
+```bash
+curl -X POST https://cre-runner.fly.dev/api/evaluations \
+  -H "Authorization: Bearer $ADMIN_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"campaign_id":"6f1c2a9e-3b7d-4c1e-9a55-0d2f8b7e4c11","repository":"octo-org/hello-world","pr_number":42}'
+```
+
+**响应 202**：返回新建的评估记录（`status: "pending"`），用 `id` 轮询接口 10。
+
+## 9. 评估列表
+
+`GET /api/evaluations`
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `page` / `page_size` | int | `0` / `20` | 同接口 3 |
+| `campaign_id` | string | – | 按 campaign 过滤 |
+| `repo` | string | – | 按仓库 `owner/repo` 过滤 |
+| `pr_number` | int | – | 按 PR 编号过滤 |
+| `status` | string | – | `pending` / `running` / `done` / `failed` |
+
+返回 `{"data": [...], "pagination": {...}}`，按创建时间倒序。
+
+## 10. 获取单个评估
+
+`GET /api/evaluations/{id}`
+
+```json
+{
+  "data": {
+    "id": 12,
+    "campaign_id": "6f1c2a9e-3b7d-4c1e-9a55-0d2f8b7e4c11",
+    "campaign": { "name": "CodeRabbit OSS Challenge", "reward_asset": "USDC" },
+    "repository_full_name": "octo-org/hello-world",
+    "pr_number": 42,
+    "head_sha": "1111111111111111111111111111111111111111",
+    "event": "merged",
+    "trigger": "webhook",
+    "delivery_id": "2f1459e0-c1aa-11f1-9a98-b70712a5a439",
+    "status": "done",
+    "score": 91,
+    "eligible": true,
+    "reward": "455000000",
+    "evaluation_hash": "0x…",
+    "policy_hash": "0x…",
+    "replayed": false,
+    "error": null,
+    "created_at": "2026-10-07T09:12:33.456+00:00",
+    "updated_at": "2026-10-07T09:13:10.120+00:00"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `score` | 0–100 贡献分 |
+| `eligible` | 是否满足 campaign 的资格规则 |
+| `reward` | 奖励，**最小单位**字符串（USDC 6 位小数：`"455000000"` = 455 USDC；SOL 9 位） |
+| `evaluation_hash` / `policy_hash` | 评估与所用 campaign 规则的 SHA-256，可独立复算 |
+| `replayed` | `merged` 评估已结算过，runner 返回了已记录的结果（不会重复发奖） |
+
+**响应 404**：`{ "error": "evaluation not found" }`
+
+---
+
 ## 数据库
 
 表结构见 `migrations/`：
 
 - `001_github_webhook_events.sql`：webhook 事件表
 - `002_frontend_api.sql`：`number` 生成列、`github_webhook_repos` / `github_webhook_repo_facets` 视图、`campaigns` / `campaign_repos` 表
+- `003_evaluations.sql`：`evaluations` 表（PR 评估结果）

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/smartcontractkit/cre-sdk-go/cre"
 	"github.com/stretchr/testify/require"
@@ -156,27 +157,10 @@ func TestCommittedConfigs(t *testing.T) {
 	}
 }
 
-// policy_hash covers the exact campaign JSON, so equal policies hash equally across configs.
-func TestPolicyHashFromConfig(t *testing.T) {
-	hashOf := func(name string) string {
-		raw, err := os.ReadFile(name)
-		require.NoError(t, err)
-		cfg, err := cre.ParseJSON[Config](raw)
-		require.NoError(t, err)
-		h, err := policyHash(cfg.Campaign)
-		require.NoError(t, err)
-		return h
-	}
-	local := hashOf("config.local.json")
-	require.Regexp(t, `^0x[0-9a-f]{64}$`, local)
-	require.Equal(t, local, hashOf("config.docker.json"))
-	require.Equal(t, local, hashOf("config.production.json"))
-}
-
 func TestValidateConfig(t *testing.T) {
+	static := testPolicy
 	valid := func() *Config {
-		c := &Config{Mode: ModeSimulation, GitHubAPIURL: "x", Campaign: testPolicy}
-		return c
+		return &Config{Mode: ModeSimulation, GitHubAPIURL: "x", Weights: testPolicy.Weights, Campaign: &static}
 	}
 	require.NoError(t, validateConfig(valid()))
 
@@ -185,22 +169,75 @@ func TestValidateConfig(t *testing.T) {
 	require.ErrorContains(t, validateConfig(c), "mode")
 
 	c = valid()
-	c.Campaign.Reward.Model = "nope"
-	require.Error(t, validateConfig(c))
-
-	c = valid()
-	c.Campaign.Reward.Max = "1.0000001" // more decimals than the token
-	require.ErrorContains(t, validateConfig(c), "decimals")
-
-	c = valid()
-	c.Campaign.Weights.LLM = 5000
+	c.Weights.LLM = 5000
 	require.ErrorContains(t, validateConfig(c), "10000")
 
 	c = valid()
+	c.Campaign = nil
+	require.ErrorContains(t, validateConfig(c), "campaignApiUrl")
+
+	bad := testPolicy
+	bad.Reward.Max = "1.0000001" // more decimals than the token
+	c = valid()
+	c.Campaign = &bad
+	require.ErrorContains(t, validateConfig(c), "decimals")
+
+	c = valid()
 	c.Mode = ModeProduction
+	require.ErrorContains(t, validateConfig(c), "campaignApiUrl")
+	c.CampaignAPIURL, c.Campaign = "https://runner", nil
 	require.ErrorContains(t, validateConfig(c), "authorizedKeys")
 	c.AuthorizedKeys = []AuthorizedKey{{Type: "KEY_TYPE_ECDSA_EVM", PublicKey: "0xabc"}}
 	require.ErrorContains(t, validateConfig(c), "reviewer URLs")
 	c.Reviewers.CodeReviewer.URL, c.Reviewers.LLM.URL = "https://r/code", "https://r/issue"
 	require.NoError(t, validateConfig(c))
+}
+
+func TestCampaignToPolicy(t *testing.T) {
+	str := func(s string) *string { return &s }
+	minScore := 70
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	base := apiCampaign{
+		ID: "6f1c2a9e-3b7d-4c1e-9a55-0d2f8b7e4c11", Status: "active", RewardAsset: "USDC",
+		MaxRewardPerPR: "500.000000", MinScore: &minScore,
+		Eligibility: map[string]bool{"merged": true, "ci_passed": true, "linked_issue": false, "duplicate": false},
+		StartsAt:    str("2026-10-10T00:00:00+00:00"), EndsAt: str("2026-12-31T23:59:59+00:00"),
+		Repos: []string{"acme/docs", "acme/pool"},
+	}
+
+	p, err := base.toPolicy("acme/pool", now, testPolicy.Weights)
+	require.NoError(t, err)
+	require.Equal(t, Eligibility{RequireMerged: true, RequireCIPassed: true, MinScore: 70}, p.Eligibility)
+	require.Equal(t, 6, p.TokenDecimals)
+	require.Equal(t, testPolicy.Weights, p.Weights)
+	units, err := rewardBaseUnits(89, p)
+	require.NoError(t, err)
+	require.Equal(t, "445000000", units.String())
+
+	sol := base
+	sol.RewardAsset, sol.MaxRewardPerPR = "SOL", "1.5"
+	p, err = sol.toPolicy("acme/pool", now, testPolicy.Weights)
+	require.NoError(t, err)
+	require.Equal(t, 9, p.TokenDecimals)
+
+	cases := map[string]func(c *apiCampaign) (string, time.Time){
+		"not active":        func(c *apiCampaign) (string, time.Time) { c.Status = "draft"; return "acme/pool", now },
+		"not in campaign":   func(c *apiCampaign) (string, time.Time) { return "acme/other", now },
+		"has not started":   func(c *apiCampaign) (string, time.Time) { return "acme/pool", now.AddDate(0, -2, 0) },
+		"has ended":         func(c *apiCampaign) (string, time.Time) { return "acme/pool", now.AddDate(1, 0, 0) },
+		"unsupported":       func(c *apiCampaign) (string, time.Time) { c.RewardAsset = "DOGE"; return "acme/pool", now },
+		"max_reward_per_pr": func(c *apiCampaign) (string, time.Time) { c.MaxRewardPerPR = "1.0000001"; return "acme/pool", now },
+	}
+	for want, mutate := range cases {
+		c := base
+		repo, at := mutate(&c)
+		_, err := c.toPolicy(repo, at, testPolicy.Weights)
+		require.ErrorContains(t, err, want)
+	}
+
+	open := base
+	open.StartsAt, open.EndsAt, open.MinScore = nil, nil, nil
+	p, err = open.toPolicy("acme/pool", now, testPolicy.Weights)
+	require.NoError(t, err)
+	require.Equal(t, 0, p.Eligibility.MinScore)
 }

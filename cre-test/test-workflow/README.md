@@ -6,6 +6,7 @@ HTTP-triggered workflow: GitHub PR -> evidence + reviews -> score -> reward deci
 | --- | --- |
 | `main.go` | WASM entry point |
 | `workflow.go` | Trigger handler, config validation, workflow wiring |
+| `campaign.go` | Campaign policy from cre-runner (`GET /api/campaigns/{id}`) |
 | `types.go` | Request/response contract and config types |
 | `request.go` | Input validation |
 | `github.go` | GitHub evidence fetch (REST + GraphQL file paths) |
@@ -20,19 +21,30 @@ Requires Go 1.25.3+ (`go.mod` is in `cre-test/`).
 
 | Target | Config | Use |
 | --- | --- | --- |
-| `local-simulation` | `config.local.json` | `scripts/simulate.sh` on your machine; stub reviewers |
-| `docker-simulation` | `config.docker.json` | runner image; reviewers at `http://reviewer:8090` |
+| `local-simulation` | `config.local.json` | `scripts/simulate.sh`; static offline campaign, stub reviewers |
+| `docker-simulation` | `config.docker.json` | runner image; campaigns from cre-runner, reviewers at `http://reviewer:8090` |
 | `production-settings` | `config.production.json` | deployment; refused until `authorizedKeys` and reviewer URLs are set |
+
+## Campaigns
+
+With `campaignApiUrl` set (docker, production), each evaluation fetches `GET {campaignApiUrl}/api/campaigns/{campaign_id}`
+from cre-runner on every node (identical consensus), then requires:
+
+- `status` is `active`, the PR's repository is in `repos`, and DON time is within `starts_at`/`ends_at`.
+- Mapping: `eligibility.merged|ci_passed|linked_issue` -> eligibility rules, `min_score`, `max_reward_per_pr`
+  (score-based: `max * score / 100`, floored), `reward_asset` USDC (6 decimals) or SOL (9).
+- `weights` (evidence / code reviewer / LLM, basis points) come from the workflow config, not the campaign.
+
+`policy_hash` is the SHA-256 of the canonical applied policy (campaign rules + weights).
+
+With `campaignApiUrl` empty, the static `campaign` in config is used (simulation only, for offline runs and tests).
 
 ## Config
 
-- `mode`: `simulation` (allows empty `authorizedKeys`, stub reviewers) or `production`.
-- `campaign.weights`: basis points, must sum to 10000.
-- `campaign.reward`: amounts are decimal strings in whole tokens (`"500"`, `"0.25"`), converted to base units
-  with `tokenDecimals`. `score_based` floors, so a reward never exceeds the policy.
+- `mode`: `simulation` (allows empty `authorizedKeys`, stub reviewers, static campaign) or `production`.
+- `weights`: basis points, must sum to 10000.
+- Static `campaign.reward` amounts are decimal strings in whole tokens (`"500"`, `"0.25"`).
 - A reviewer with an empty `url` scores with the evidence score (stub, simulation only).
-
-`policy_hash` is the SHA-256 of the canonical `campaign` JSON: change the policy, change the hash.
 
 ## Determinism
 
@@ -60,10 +72,11 @@ Use goroutines in services outside the workflow (runner, reviewer, load tests).
 ## Request
 
 ```json
-{ "repository": "owner/repo", "pr_number": 1, "campaign_id": "example-oss-2026", "event": "opened",
+{ "repository": "owner/repo", "pr_number": 1, "campaign_id": "<cre-runner campaign UUID>", "event": "opened",
   "head_sha": "<optional>", "notes": {} }
 ```
 
+`campaign_id` is a cre-runner campaign UUID (`example-oss-2026` for the static offline campaign).
 `notes` is optional and never affects the score, reward or hash.
 
 ## Response

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -39,9 +40,31 @@ func main() {
 		corsOrigins = []string{"*"}
 	}
 
+	// PR evaluations via the CRE runner; off unless EVALUATOR_URL is set.
+	store := supabaseEvalStore{db: client}
+	var evals *evaluations
+	if url := os.Getenv("EVALUATOR_URL"); url != "" {
+		secret := os.Getenv("EVALUATOR_SECRET")
+		if len(secret) < 16 {
+			log.Fatalf("EVALUATOR_SECRET must be at least 16 characters (the runner's RUNNER_SHARED_SECRET)")
+		}
+		concurrency, err := strconv.Atoi(os.Getenv("EVALUATION_CONCURRENCY"))
+		if err != nil || concurrency <= 0 {
+			concurrency = 2
+		}
+		evals = newEvaluations(store, newEvaluatorClient(url, secret), concurrency)
+		if err := store.failInterrupted(); err != nil {
+			log.Printf("evaluations: close interrupted runs: %v", err)
+		}
+		log.Printf("evaluations: enabled, runner %s", url)
+	} else {
+		log.Printf("EVALUATOR_URL not set; PR evaluations are disabled")
+	}
+
 	r := gin.Default()
 	r.Use(corsMiddleware(corsOrigins))
 	registerAPI(r, client)
+	registerEvaluationsAPI(r, evals, store, os.Getenv("ADMIN_API_KEY"))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -81,6 +104,14 @@ func main() {
 		}
 
 		log.Printf("webhook: saved delivery %s event=%s", ev.DeliveryID, ev.Event)
+		// Only verified deliveries may trigger evaluations (they cost LLM calls and can settle rewards).
+		if evals != nil {
+			if ev.SignatureValid == nil {
+				log.Printf("webhook: not evaluating unsigned delivery %s (set GITHUB_WEBHOOK_SECRET)", ev.DeliveryID)
+			} else {
+				go evals.fromWebhook(ev) // Runs take minutes; GitHub expects a reply within 10s.
+			}
+		}
 		c.String(http.StatusOK, "ack")
 	})
 

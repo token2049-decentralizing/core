@@ -1,12 +1,15 @@
 # ContribOracle CRE
 
 ```
-GitHub App ──POST /evaluate (HMAC-signed)──► runner ──warm──► reviewer ──► LLM (BytePlus ModelArk)
-                                               │                  ▲
-                                               ▼                  │ cache hit
-                                   cre workflow simulate ── HTTP ─┘
-                                     (CRE workflow, WASM) ── HTTP ──► GitHub API
+GitHub ──webhook──► cre-runner (Fly) ──POST /evaluate (HMAC)──► runner ──warm──► reviewer ──► LLM (BytePlus)
+                      ▲    │ Supabase: events, campaigns,          │                 ▲
+                      │    │ evaluations                           ▼                 │ cache hit
+                      │    └──────────────────────     cre workflow simulate ── HTTP ┘
+                      └── GET /api/campaigns/{id} ──── (CRE workflow, WASM) ── HTTP ──► GitHub API
 ```
+
+`cre-runner/` (repo root) receives GitHub webhooks, stores campaigns and evaluation results, and calls this
+runner. See `cre-runner/API.md` (evaluations section) for its side.
 
 | Path | What |
 | --- | --- |
@@ -96,13 +99,15 @@ X-ContribOracle-Signature: sha256=<hex HMAC-SHA256(raw body, RUNNER_SHARED_SECRE
 Body:
 
 ```json
-{ "repository": "owner/repo", "pr_number": 1, "campaign_id": "example-oss-2026", "event": "opened",
+{ "repository": "owner/repo", "pr_number": 1, "campaign_id": "<cre-runner campaign UUID>", "event": "opened",
   "head_sha": "<optional 40-char commit SHA>", "notes": {} }
 ```
 
 - `event`: `opened` (preview, never pays) or `merged`.
 - `head_sha`: optional but recommended (from the webhook's `pull_request.head.sha`). The evaluation fails
   if the PR head moved, so every review and score refers to one exact commit.
+- `campaign_id`: a cre-runner campaign UUID. The workflow fetches its rules from cre-runner; the campaign must be
+  `active`, include the repository and be within its time window.
 - `notes`: optional, ignored by scoring and hashing.
 
 Responses:
@@ -147,7 +152,8 @@ const res = await fetch(`${RUNNER_URL}/evaluate`, {
 curl:
 
 ```bash
-BODY='{"repository":"token2049-decentralizing/core","pr_number":1,"campaign_id":"example-oss-2026","event":"opened"}'
+# campaign_id: an active cre-runner campaign that includes the repo (GET https://cre-runner.fly.dev/api/campaigns)
+BODY='{"repository":"token2049-decentralizing/core","pr_number":1,"campaign_id":"<campaign UUID>","event":"opened"}'
 SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$RUNNER_SHARED_SECRET" | awk '{print $2}')"
 curl -X POST localhost:8080/evaluate -H "X-ContribOracle-Signature: $SIG" -d "$BODY"
 ```
