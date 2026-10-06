@@ -44,6 +44,12 @@ func main() {
 			return
 		}
 
+		// Only user activity is recorded; bot-triggered events are acknowledged and dropped.
+		if ev.FromBot {
+			c.String(http.StatusOK, "ignored")
+			return
+		}
+
 		// Record the delivery even if the signature is invalid, but reject it.
 		if err := saveWebhookEvent(client, ev); err != nil {
 			log.Printf("webhook: failed to save delivery %s: %v", ev.DeliveryID, err)

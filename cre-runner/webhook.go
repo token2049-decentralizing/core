@@ -28,6 +28,7 @@ type webhookEvent struct {
 	SignatureValid     *bool             `json:"signature_valid"`
 	Headers            map[string]string `json:"headers"`
 	Payload            json.RawMessage   `json:"payload"`
+	FromBot            bool              `json:"-"`
 }
 
 // payloadSummary holds the common top-level fields shared by most GitHub webhook payloads.
@@ -41,6 +42,7 @@ type payloadSummary struct {
 	} `json:"repository"`
 	Sender *struct {
 		Login string `json:"login"`
+		Type  string `json:"type"` // "User", "Bot", "Organization", ...
 	} `json:"sender"`
 }
 
@@ -118,6 +120,7 @@ func buildWebhookEvent(h http.Header, body []byte, secret string) (*webhookEvent
 		}
 		if s.Sender != nil {
 			ev.SenderLogin = &s.Sender.Login
+			ev.FromBot = s.Sender.Type == "Bot" || strings.HasSuffix(s.Sender.Login, "[bot]")
 		}
 	}
 
