@@ -11,10 +11,23 @@
 ## Run the runner in Docker
 
 ```bash
-cp .env.example .env    # fill in CRE_API_KEY, GITHUB_APP_*, RUNNER_SHARED_SECRET
+cp .env.example .env    # fill in GITHUB_APP_*, RUNNER_SHARED_SECRET (+ CRE_API_KEY if you have one)
 docker compose up --build
 curl localhost:8080/healthz   # ok
 ```
+
+CRE auth, pick one:
+
+- **API key** (servers): set `CRE_API_KEY` in `.env`. Keys are created at app.chain.link > Account Settings
+  (the CLI has no command for it).
+- **Your `cre login` session** (local dev): leave `CRE_API_KEY` empty, run `cre login` on the host, then
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.login.yml up --build
+  ```
+
+  This mounts `~/.cre` (writable, the CLI refreshes the token there) and limits the runner to 1 concurrent
+  evaluation. The container gets full access to your CRE account, so use it on your own machine only.
 
 The App private key is mounted read-only from `GITHUB_APP_PRIVATE_KEY_PATH`.
 On Linux the container user (uid 10001) must be able to read it: `chmod 644 github-app.pem`.
