@@ -453,10 +453,10 @@ func TestMergedWithoutWalletFails(t *testing.T) {
 	require.Zero(t, evals.Load())
 }
 
-type fakePayouts func(ctx context.Context, campaignID, recipient string) (*solana.Settings, error)
+type fakePayouts func(ctx context.Context, campaignID, asset, recipient string) (*solana.Settings, error)
 
-func (f fakePayouts) Prepare(ctx context.Context, campaignID, recipient string) (*solana.Settings, error) {
-	return f(ctx, campaignID, recipient)
+func (f fakePayouts) Prepare(ctx context.Context, campaignID, asset, recipient string) (*solana.Settings, error) {
+	return f(ctx, campaignID, asset, recipient)
 }
 
 func aliceWallets() fakeWallets {
@@ -475,8 +475,9 @@ func TestMergedPaysOnSolana(t *testing.T) {
 		return res, nil
 	}, 1, 1)
 	x.wallets = aliceWallets()
-	x.payouts = fakePayouts(func(_ context.Context, campaignID, recipient string) (*solana.Settings, error) {
+	x.payouts = fakePayouts(func(_ context.Context, campaignID, asset, recipient string) (*solana.Settings, error) {
 		assert.Equal(t, usdcCampaign.ID, campaignID)
+		assert.Equal(t, "USDC", asset)
 		assert.Equal(t, aliceWallet, recipient)
 		return &solana.Settings{ChainSelector: solana.DevnetChainSelector, Mint: "Mint111"}, nil
 	})
@@ -498,7 +499,7 @@ func TestMergedNotOnChainIsNotSettled(t *testing.T) {
 		return eligibleResult(ctx, req, cfg)
 	}, 1, 1)
 	x.wallets = aliceWallets()
-	x.payouts = fakePayouts(func(context.Context, string, string) (*solana.Settings, error) {
+	x.payouts = fakePayouts(func(context.Context, string, string, string) (*solana.Settings, error) {
 		return nil, solana.ErrCampaignNotOnChain
 	})
 	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged", AuthorID: 101, AuthorLogin: "alice"})
@@ -522,7 +523,7 @@ func TestMergedNotOnChainIsNotSettled(t *testing.T) {
 func TestSolanaPayoutsNeedRecipient(t *testing.T) {
 	store := newFakeStore(usdcCampaign)
 	x := newTestExecutor(store, okResult, 1, 1)
-	x.payouts = fakePayouts(func(context.Context, string, string) (*solana.Settings, error) {
+	x.payouts = fakePayouts(func(context.Context, string, string, string) (*solana.Settings, error) {
 		t.Error("Prepare must not run without a recipient")
 		return nil, nil
 	})

@@ -247,7 +247,7 @@ type warmer interface {
 // payoutPreparer reads the campaign on Solana and creates the recipient's token account
 // (internal/solana).
 type payoutPreparer interface {
-	Prepare(ctx context.Context, campaignID, recipient string) (*solana.Settings, error)
+	Prepare(ctx context.Context, campaignID, asset, recipient string) (*solana.Settings, error)
 }
 
 // walletResolver finds or pregenerates a GitHub user's Solana wallet (internal/privy).
@@ -421,7 +421,7 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 		}
 		// Not settled in the database unless paid on-chain: fail so the PR can be retried
 		// (redeliver the webhook) once the campaign is created and funded on Solana.
-		settings, err := x.payouts.Prepare(x.ctx, c.ID, req.RecipientWallet)
+		settings, err := x.payouts.Prepare(x.ctx, c.ID, c.RewardAsset, req.RecipientWallet)
 		if err != nil {
 			if x.ctx.Err() != nil {
 				fail(errInterrupted)
