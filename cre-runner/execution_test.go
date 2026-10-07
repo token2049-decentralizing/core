@@ -584,3 +584,15 @@ func TestShutdownInterruptsAndRestartRecovers(t *testing.T) {
 	require.Equal(t, statusFailed, store.records["stale"].statuses[1])
 	require.Len(t, store.records["elsewhere"].statuses, 1)
 }
+
+func TestStartRecordsRerun(t *testing.T) {
+	store := newFakeStore()
+	x := newTestExecutor(store, okResult, 1, 1)
+	id, err := x.Start(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "opened"}, usdcCampaign, "orig-id")
+	require.NoError(t, err)
+	r := store.records[id] // Inserted before Start returns.
+	require.NotNil(t, r)
+	require.Equal(t, "orig-id", *r.row.RerunOf)
+	wait(x)
+	require.Equal(t, []string{statusQueued, statusRunning, statusCompleted}, store.list()[0].statuses)
+}

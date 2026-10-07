@@ -16,8 +16,10 @@ import { ApiErrorState } from "@/components/api-error-state"
 import { AutoRefresh } from "@/components/auto-refresh"
 import { ExecutionStatusBadge } from "@/components/execution-status-badge"
 import { ExecutionTable } from "@/components/execution-table"
+import { LivePRStatus } from "@/components/live-pr-status"
 import { PageBody, PageHeader, Section } from "@/components/page"
 import { Pager } from "@/components/pager"
+import { RerunButton } from "@/components/rerun-button"
 import { Button } from "@/components/ui/button"
 
 const PAGE_SIZE = 20
@@ -97,6 +99,9 @@ export default async function PRExecutionsPage(
         }
         actions={
           <>
+            {rows[0] && (
+              <RerunButton execution={rows[0]} label="Re-run latest" />
+            )}
             <Button
               variant="outline"
               nativeButton={false}
@@ -127,6 +132,14 @@ export default async function PRExecutionsPage(
         executions={rows}
         total={executions.data.pagination.total}
       />
+
+      <Section title="Live PR status">
+        <LivePRStatus
+          repo={repo}
+          number={pr}
+          eligibility={campaign.data.eligibility}
+        />
+      </Section>
 
       <Section title="Executions">
         <ExecutionTable

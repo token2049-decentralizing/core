@@ -251,6 +251,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("cre executions: %v", err)
 	}
+	registerPRTools(r, newPRToolsFromEnv(client, executions))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -333,6 +334,19 @@ func main() {
 		defer cancel()
 		executions.Shutdown(execCtx)
 	}
+}
+
+// newPRToolsFromEnv serves live PR status (needs GitHub App credentials) and reruns
+// (need CRE executions).
+func newPRToolsFromEnv(db *supabase.Client, executions *executor) *prTools {
+	t := &prTools{db: db, store: supabaseStore{db}}
+	if tokens, err := ghapp.SourceFromEnv(); err == nil {
+		t.gh = newGitHubPRs(os.Getenv("GITHUB_API_URL"), tokens)
+	}
+	if executions != nil {
+		t.runs = executions // Only when set: a nil *executor would be a non-nil interface.
+	}
+	return t
 }
 
 // newAppealsFromEnv enables review requests when GitHub App credentials are set.

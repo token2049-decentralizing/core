@@ -18,6 +18,7 @@ import { AutoRefresh } from "@/components/auto-refresh"
 import { ExecutionStatusBadge } from "@/components/execution-status-badge"
 import { prExecutionsHref } from "@/components/execution-table"
 import { PageBody, PageHeader, Section } from "@/components/page"
+import { RerunButton } from "@/components/rerun-button"
 import { ScoreBreakdown } from "@/components/score-breakdown"
 import { Button } from "@/components/ui/button"
 
@@ -96,6 +97,7 @@ export default async function ExecutionPage(
             {e.status === "completed" && (
               <AppealButton executionId={e.id} appeal={e.appeal} />
             )}
+            <RerunButton execution={e} />
             <Button
               variant="outline"
               nativeButton={false}
@@ -222,6 +224,19 @@ export default async function ExecutionPage(
 
         <aside>
           <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-xs">
+            {e.rerun_of && (
+              <>
+                <dt className="text-muted-foreground">Rerun of</dt>
+                <dd>
+                  <Link
+                    href={`/executions/${e.rerun_of}`}
+                    className="underline-offset-4 hover:underline"
+                  >
+                    {e.rerun_of.slice(0, 8)}
+                  </Link>
+                </dd>
+              </>
+            )}
             <dt className="text-muted-foreground">Execution ID</dt>
             <dd className="break-all">{e.id}</dd>
             <dt className="text-muted-foreground">Event</dt>
