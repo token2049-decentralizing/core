@@ -175,10 +175,38 @@ func parseSimulateOutput(out string) (*evaluationResponse, error) {
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		if msg, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "✗ "); ok {
-			return nil, &evalError{msg: msg}
+			return nil, &evalError{msg: errorWithContinuation(msg, lines[i+1:])}
 		}
 	}
 	return nil, &evalError{msg: "no result in simulator output: " + tail(lines, 5)}
+}
+
+// logLineRe: simulator log lines ("2026-10-06T23:58:00Z [SIMULATION] ...").
+var logLineRe = regexp.MustCompile(`^\d{4}-\d\d-\d\dT`)
+
+const (
+	maxErrorLines = 40
+	maxErrorChars = 4000
+)
+
+// errorWithContinuation joins an error's continuation lines (e.g. a multi-line RPC error
+// dump with the program logs) onto one line, up to the next CLI status or log line.
+func errorWithContinuation(first string, rest []string) string {
+	parts := []string{first}
+	for _, l := range rest {
+		l = strings.TrimSpace(l)
+		if l == "" || len(parts) > maxErrorLines || logLineRe.MatchString(l) ||
+			strings.HasPrefix(l, "✓") || strings.HasPrefix(l, "✗") || strings.HasPrefix(l, "!") ||
+			strings.ContainsAny(l[:min(len(l), 3)], "╭│╰") {
+			break
+		}
+		parts = append(parts, l)
+	}
+	msg := strings.Join(parts, " ")
+	if len(msg) > maxErrorChars {
+		msg = msg[:maxErrorChars] + "…"
+	}
+	return msg
 }
 
 func tail(lines []string, n int) string {
