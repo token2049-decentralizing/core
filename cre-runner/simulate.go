@@ -37,7 +37,7 @@ type cliSimulator struct {
 	Broadcast bool
 	// SolanaRPC becomes CRE_SOLANA_RPC_URL, which project.yaml uses for solana-devnet.
 	SolanaRPC string
-	// Limits is a simulation limits file (`cre workflow limits export`), relative to Dir.
+	// Limits is the absolute path of a simulation limits file (`cre workflow limits export`).
 	// cre/simulation-limits.json raises only the Solana report size: a RewardReport write is
 	// 298 bytes and the default limit (the production DON's) is 265.
 	Limits string
