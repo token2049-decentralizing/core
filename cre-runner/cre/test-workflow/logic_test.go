@@ -54,6 +54,11 @@ func TestParseRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, sha, req.HeadSHA)
 
+	wallet := "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+	req, err = parseRequest([]byte(valid + `,"recipient_wallet":"` + wallet + `"}`))
+	require.NoError(t, err)
+	require.Equal(t, wallet, req.RecipientWallet)
+
 	for _, bad := range []string{
 		`{"repository":"nope","pr_number":1,"campaign_id":"c","event":"opened"}`,
 		`{"repository":"a/b","pr_number":-1,"campaign_id":"c","event":"opened"}`,
@@ -64,6 +69,8 @@ func TestParseRequest(t *testing.T) {
 		valid + `,"notes":null}`,
 		valid + `,"head_sha":"abc"}`,
 		valid + `,"head_sha":"` + strings.Repeat("A", 40) + `"}`,
+		valid + `,"recipient_wallet":"0xabc"}`,
+		valid + `,"recipient_wallet":"` + strings.Repeat("0", 44) + `"}`, // 0 is not base58
 		`[]`,
 	} {
 		_, err := parseRequest([]byte(bad))
@@ -167,6 +174,9 @@ func TestRunnerGeneratedConfig(t *testing.T) {
 	require.Equal(t, 70, cfg.Campaign.Eligibility.MinScore)
 	require.True(t, cfg.Campaign.Eligibility.RequireLinkedIssue)
 	require.Equal(t, "http://127.0.0.1:8080/review/code", cfg.Reviewers.CodeReviewer.URL)
+	require.NotNil(t, cfg.Solana)
+	require.Equal(t, uint64(16423721717087811551), cfg.Solana.ChainSelector)
+	require.Equal(t, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", cfg.Solana.Mint)
 
 	reward, err := rewardBaseUnits(90, cfg.Campaign)
 	require.NoError(t, err)

@@ -16,10 +16,12 @@ import {
   formatDateTime,
   humanize,
 } from "@/lib/format"
+import { SOLANA_CLUSTER } from "@/lib/solana"
 import { ApiErrorState } from "@/components/api-error-state"
 import { AutoRefresh } from "@/components/auto-refresh"
 import { ExecutionTable } from "@/components/execution-table"
 import { CampaignActions } from "@/components/campaign-actions"
+import { CampaignTreasury } from "@/components/campaign-treasury"
 import { CampaignStatusBadge } from "@/components/campaign-status-badge"
 import { ExecutionLookup } from "@/components/execution-lookup"
 import { PageBody, PageHeader, Section } from "@/components/page"
@@ -193,15 +195,8 @@ export default async function CampaignPage(
               />
             </Section>
           )}
-          <Section title="Treasury">
-            {campaign.treasury_address ? (
-              <p className="text-xs break-all">{campaign.treasury_address}</p>
-            ) : (
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Not funded yet. The Solana treasury address appears here once
-                funds are deposited.
-              </p>
-            )}
+          <Section title={`Solana treasury (${SOLANA_CLUSTER})`}>
+            <CampaignTreasury campaign={campaign} />
           </Section>
           <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1.5 text-xs">
             <dt className="text-muted-foreground">Created</dt>

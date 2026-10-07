@@ -25,6 +25,7 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 11 | GET  | `/api/executions` | 全部 CRE 执行记录（分页，可按 campaign / 仓库 / PR / 状态过滤） |
 | 12 | GET  | `/api/executions/{id}` | 单个 CRE 执行详情（含发给 workflow 的请求、评分明细、复核请求） |
 | 13 | POST | `/api/executions/{id}/appeals` | 对评分发起人工复核：在 PR 下评论并 @ 复核人 |
+| 14 | GET  | `/api/wallets/github/{login}` | 某 GitHub 用户的收款钱包（只读） |
 
 错误码：
 
@@ -753,6 +754,7 @@ campaign 不存在返回 404。
 | `pr` | PR 编号（通常和 `repo` 一起用） |
 | `status` | `queued` / `running` / `completed` / `failed` / `skipped` |
 | `event` | `opened` / `merged` |
+| `author` | PR 作者的 GitHub login，不区分大小写 |
 | `page` / `page_size` | 同其他列表接口，默认 0 / 20，`page_size` 最大 100 |
 
 ```bash
@@ -760,7 +762,11 @@ campaign 不存在返回 404。
 curl "https://cre-runner.fly.dev/api/executions?status=running"
 ```
 
-响应格式同接口 8。每条记录（接口 8 也一样）都带 `campaign` 字段：`{ "id", "name", "reward_asset" }`，可以直接显示 campaign 名称、换算 `reward`。参数不合法返回 400。
+响应格式同接口 8。每条记录（接口 8 也一样）还带：
+
+- `campaign`：`{ "id", "name", "reward_asset" }`，可以直接显示 campaign 名称、换算 `reward`
+- `author_login`：PR 作者
+- `recipient_wallet`：奖励发往的 Solana 地址，只有 `merged` 有值参数不合法返回 400。
 
 ---
 
@@ -837,6 +843,29 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 
 ---
 
+## 14. GitHub 用户的收款钱包
+
+`GET /api/wallets/github/{login}`
+
+返回 runner 给这个 GitHub 用户付款用的 Privy Solana 钱包。login 不区分大小写。
+
+```json
+{
+  "data": {
+    "github_user_id": 1234567,
+    "github_login": "alice",
+    "solana_address": "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",
+    "pregenerated_at": "2026-10-07T06:05:39+00:00",
+    "created_at": "2026-10-07T06:05:39+00:00"
+  }
+}
+```
+
+- `pregenerated_at`：runner 在用户登录前替他创建钱包的时间；用户本来就有 Privy 账号时为 `null`。
+- 钱包在他的 PR 第一次以 `merged` 被评估时创建（Privy 配置见 DEPLOY.md 3.4），**这个接口只读，不会创建钱包**。还没有钱包时返回 404。
+
+---
+
 ## 数据库
 
 表结构见 `migrations/`：
@@ -845,6 +874,8 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 - `002_frontend_api.sql`：`number` 生成列、`github_webhook_repos` / `github_webhook_repo_facets` 视图、`campaigns` / `campaign_repos` 表
 - `003_cre_executions.sql`：CRE workflow 执行记录表 `cre_executions`（见下文）
 - `004_scorecards_appeals.sql`：`cre_executions.scorecard` 列和复核请求表 `cre_execution_appeals`（**部署前先执行**）
+- `005_contributor_wallets.sql`：执行记录的作者和收款钱包，`contributor_wallets` 表
+- `006_payout_tx.sql`：`cre_executions.payout_tx`，链上发奖的 Solana 交易
 
 ---
 

@@ -7,6 +7,7 @@ import {
   RiDashboard3Line,
   RiPulseLine,
   RiTrophyLine,
+  RiWallet3Line,
 } from "@remixicon/react"
 
 import type { Repo } from "@/lib/api"
@@ -59,6 +60,16 @@ export function SidebarNav() {
             >
               <RiPulseLine />
               <span>CRE executions</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={pathname === "/me"}
+              tooltip="My rewards"
+              render={<Link href="/me" />}
+            >
+              <RiWallet3Line />
+              <span>My rewards</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

@@ -20,6 +20,9 @@ GitHub ──POST /webhook──► cre-runner ──► Supabase: github_webhoo
 | `policy.go` | Supabase campaign → workflow config (passed per run with `--config`). |
 | `simulate.go` | Runs `cre workflow simulate` and parses its result. |
 | `internal/reviewer/` | LLM PR reviewer (`POST /review/code`, `/review/issue`), served by this process. |
+| `internal/solana/` | Reads the on-chain campaign and creates the recipient's token account before a payout. |
+| `cmd/solana-key/` | Prints a solana-keygen file as base58 for `CRE_SOLANA_PRIVATE_KEY`. |
+| `internal/privy/` | Finds or pregenerates a PR author's Privy Solana wallet from their GitHub account (payout recipient). |
 | `internal/ghapp/` | GitHub App token minting (read-only, per repository installation). |
 | `crelogin.go`, `scripts/cre-login-env.sh` | `cre login` session as env (`CRE_LOGIN_YAML`) for Docker/Fly. |
 | `cmd/github-app-token/` | Prints an App installation token (used by `cre/scripts/simulate.sh`). |
@@ -42,6 +45,12 @@ and then evaluated in the background, once per active campaign the repository is
 Each execution is a `cre_executions` row whose `id` is the execution id. Status, result, and failure reason
 are written as it progresses; see [API.md](API.md#cre-执行webhook-触发异步).
 
+- **Recipient.** For `merged`, the PR author's Privy Solana wallet is resolved first, and pregenerated from their
+  GitHub account if they never signed in. It is passed to the workflow as `recipient_wallet`, which is hashed and goes into
+  the reward decision. Needs `PRIVY_APP_ID`/`PRIVY_APP_SECRET`; see [DEPLOY.md](DEPLOY.md) 3.4.
+- **On-chain payout.** With `CRE_SOLANA_PRIVATE_KEY` and `SOLANA_PROGRAM_ID`, the workflow pays eligible merged PRs
+  through the CRE forwarder into the `contrib_oracle` program (`../solana`), which enforces once per PR. Runs use
+  `--broadcast`; the transaction lands in `payout_tx`. See [DEPLOY.md](DEPLOY.md) 3.5.
 - **Settled once.** The first eligible `merged` result per (campaign, repo, PR) gets `settled = true`
   (unique index). Redeliveries are recorded as `skipped`. The Solana program must enforce the same rule on-chain.
 - **Queue.** `MAX_CONCURRENCY` simulations run at once (1 without `CRE_WASM`); up to `MAX_QUEUE` more wait.
@@ -73,7 +82,7 @@ cre login                # CRE auth: the CLI reads ~/.cre
 go run .                 # CRE_PROJECT_DIR defaults to ./cre, target local-simulation
 ```
 
-Apply `migrations/003_cre_executions.sql` and `004_scorecards_appeals.sql` in Supabase first.
+Apply the migrations in `migrations/` in order in Supabase first (004–006 are new: scorecards and appeals, contributor wallets, payout tx).
 
 ## CRE auth
 

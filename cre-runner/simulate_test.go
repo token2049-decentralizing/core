@@ -114,10 +114,24 @@ func TestCLISimulator(t *testing.T) {
 	require.NoError(t, json.Unmarshal(b, &cfg))
 	require.Equal(t, "c", cfg["campaign"].(map[string]any)["id"])
 
+	require.NotContains(t, args, "--broadcast")
+
 	env, _ := os.ReadFile(filepath.Join(dir, "env"))
 	require.Contains(t, string(env), "GITHUB_TOKEN_VALUE=ghs_abc")
 	require.Contains(t, string(env), "REVIEWER_TOKEN_VALUE=rev-token")
 	require.NotContains(t, string(env), "must-not-leak")
+}
+
+func TestCLISimulatorBroadcast(t *testing.T) {
+	bin := fakeCLI(t, fixture(t, "success.txt"))
+	sim := &cliSimulator{Bin: bin, Dir: t.TempDir(), Workflow: "w", Target: "t", Timeout: 10 * time.Second,
+		Tokens: ghapp.Static("x"), Broadcast: true}
+	_, err := sim.Evaluate(context.Background(), testRequest, testConfig(t))
+	require.NoError(t, err)
+	raw, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "args"))
+	require.Contains(t, strings.Split(string(raw), "\n"), "--broadcast")
+	env, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "env"))
+	require.Contains(t, string(env), "CRE_SOLANA_RPC_URL=https://api.devnet.solana.com") // Default.
 }
 
 func TestCLISimulatorFailureAndMissingBinary(t *testing.T) {

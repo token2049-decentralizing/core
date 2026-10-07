@@ -10,6 +10,7 @@ import {
   formatReward,
   timeAgo,
 } from "@/lib/format"
+import { explorerAddressUrl, explorerTxUrl } from "@/lib/solana"
 import { cn } from "@/lib/utils"
 import { ApiErrorState } from "@/components/api-error-state"
 import { AppealButton } from "@/components/appeal-button"
@@ -149,11 +150,13 @@ export default async function ExecutionPage(
         <Fact
           label="Reward"
           unit={
-            e.settled
-              ? "settled"
-              : e.reward !== null
-                ? "not settled"
-                : undefined
+            e.payout_tx
+              ? "paid on Solana"
+              : e.settled
+                ? "settled"
+                : e.reward !== null
+                  ? "not settled"
+                  : undefined
           }
         >
           {formatReward(e.reward, asset)}
@@ -226,6 +229,55 @@ export default async function ExecutionPage(
               {e.event === "merged"
                 ? "Merged (settlement)"
                 : "Opened / pushed (preview)"}
+            </dd>
+            <dt className="text-muted-foreground">Author</dt>
+            <dd>
+              {e.author_login ? (
+                <a
+                  href={`https://github.com/${e.author_login}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline-offset-4 hover:underline"
+                >
+                  @{e.author_login}
+                </a>
+              ) : (
+                "—"
+              )}
+            </dd>
+            <dt className="text-muted-foreground">Paid to</dt>
+            <dd>
+              {e.recipient_wallet ? (
+                <a
+                  href={explorerAddressUrl(e.recipient_wallet)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all underline-offset-4 hover:underline"
+                >
+                  {e.recipient_wallet}
+                </a>
+              ) : (
+                <span className="text-muted-foreground">
+                  {e.event === "merged" ? "—" : "Previews don't pay"}
+                </span>
+              )}
+            </dd>
+            <dt className="text-muted-foreground">Payout tx</dt>
+            <dd>
+              {e.payout_tx ? (
+                <a
+                  href={explorerTxUrl(e.payout_tx)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all text-ev-push underline-offset-4 hover:underline"
+                >
+                  {e.payout_tx}
+                </a>
+              ) : (
+                <span className="text-muted-foreground">
+                  {e.settled ? "Not paid on-chain" : "—"}
+                </span>
+              )}
             </dd>
             <dt className="text-muted-foreground">Commit</dt>
             <dd>

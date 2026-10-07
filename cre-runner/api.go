@@ -62,6 +62,7 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/campaigns/:id/repos/:owner/:repo/prs/:number/executions", a.listPRExecutions)
 	g.GET("/executions", a.listExecutions)
 	g.GET("/executions/:id", a.getExecution)
+	g.GET("/wallets/github/:login", a.getGitHubWallet)
 }
 
 func apiError(c *gin.Context, status int, msg string) {
@@ -434,21 +435,24 @@ type createCampaignRequest struct {
 	StartsAt       *time.Time      `json:"starts_at"`
 	EndsAt         *time.Time      `json:"ends_at"`
 	Repos          []string        `json:"repos"`
+	// Solana vault of the on-chain campaign (contrib_oracle), set once it is created.
+	TreasuryAddress *string `json:"treasury_address"`
 }
 
 type campaignInsert struct {
-	Name           string          `json:"name"`
-	Description    *string         `json:"description,omitempty"`
-	Sponsor        *string         `json:"sponsor,omitempty"`
-	RewardAsset    string          `json:"reward_asset"`
-	Budget         json.Number     `json:"budget"`
-	MaxRewardPerPR json.Number     `json:"max_reward_per_pr"`
-	MinScore       *int            `json:"min_score,omitempty"`
-	Eligibility    json.RawMessage `json:"eligibility,omitempty"`
-	Scoring        json.RawMessage `json:"scoring,omitempty"`
-	Status         string          `json:"status"`
-	StartsAt       *time.Time      `json:"starts_at,omitempty"`
-	EndsAt         *time.Time      `json:"ends_at,omitempty"`
+	Name            string          `json:"name"`
+	Description     *string         `json:"description,omitempty"`
+	Sponsor         *string         `json:"sponsor,omitempty"`
+	RewardAsset     string          `json:"reward_asset"`
+	Budget          json.Number     `json:"budget"`
+	MaxRewardPerPR  json.Number     `json:"max_reward_per_pr"`
+	MinScore        *int            `json:"min_score,omitempty"`
+	Eligibility     json.RawMessage `json:"eligibility,omitempty"`
+	Scoring         json.RawMessage `json:"scoring,omitempty"`
+	Status          string          `json:"status"`
+	StartsAt        *time.Time      `json:"starts_at,omitempty"`
+	EndsAt          *time.Time      `json:"ends_at,omitempty"`
+	TreasuryAddress *string         `json:"treasury_address,omitempty"`
 }
 
 type campaignRepoInsert struct {
@@ -520,6 +524,9 @@ func (req *createCampaignRequest) validate(statuses []string) (*campaignInsert, 
 		return nil, nil, errors.New("ends_at must be after starts_at")
 	}
 
+	if req.TreasuryAddress != nil && !solanaAddressRe.MatchString(*req.TreasuryAddress) {
+		return nil, nil, errors.New("treasury_address must be a base58 Solana address")
+	}
 	if len(req.Repos) > maxCampaignRepos {
 		return nil, nil, fmt.Errorf("at most %d repos per campaign", maxCampaignRepos)
 	}
@@ -537,20 +544,24 @@ func (req *createCampaignRequest) validate(statuses []string) (*campaignInsert, 
 	}
 
 	return &campaignInsert{
-		Name:           req.Name,
-		Description:    req.Description,
-		Sponsor:        req.Sponsor,
-		RewardAsset:    req.RewardAsset,
-		Budget:         req.Budget,
-		MaxRewardPerPR: req.MaxRewardPerPR,
-		MinScore:       req.MinScore,
-		Eligibility:    eligibility,
-		Scoring:        scoring,
-		Status:         req.Status,
-		StartsAt:       req.StartsAt,
-		EndsAt:         req.EndsAt,
+		Name:            req.Name,
+		Description:     req.Description,
+		Sponsor:         req.Sponsor,
+		RewardAsset:     req.RewardAsset,
+		Budget:          req.Budget,
+		MaxRewardPerPR:  req.MaxRewardPerPR,
+		MinScore:        req.MinScore,
+		Eligibility:     eligibility,
+		Scoring:         scoring,
+		Status:          req.Status,
+		StartsAt:        req.StartsAt,
+		EndsAt:          req.EndsAt,
+		TreasuryAddress: req.TreasuryAddress,
 	}, repos, nil
 }
+
+// Base58 Solana address (32 bytes encode to 32-44 characters).
+var solanaAddressRe = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 
 func (a *api) createCampaign(c *gin.Context) {
 	var req createCampaignRequest
@@ -764,18 +775,19 @@ func (a *api) getCampaign(c *gin.Context) {
 
 // campaignUpdate writes every column, so cleared optional fields become null.
 type campaignUpdate struct {
-	Name           string          `json:"name"`
-	Description    *string         `json:"description"`
-	Sponsor        *string         `json:"sponsor"`
-	RewardAsset    string          `json:"reward_asset"`
-	Budget         json.Number     `json:"budget"`
-	MaxRewardPerPR json.Number     `json:"max_reward_per_pr"`
-	MinScore       *int            `json:"min_score"`
-	Eligibility    json.RawMessage `json:"eligibility"`
-	Scoring        json.RawMessage `json:"scoring"`
-	Status         string          `json:"status"`
-	StartsAt       *time.Time      `json:"starts_at"`
-	EndsAt         *time.Time      `json:"ends_at"`
+	Name            string          `json:"name"`
+	Description     *string         `json:"description"`
+	Sponsor         *string         `json:"sponsor"`
+	RewardAsset     string          `json:"reward_asset"`
+	Budget          json.Number     `json:"budget"`
+	MaxRewardPerPR  json.Number     `json:"max_reward_per_pr"`
+	MinScore        *int            `json:"min_score"`
+	Eligibility     json.RawMessage `json:"eligibility"`
+	Scoring         json.RawMessage `json:"scoring"`
+	Status          string          `json:"status"`
+	StartsAt        *time.Time      `json:"starts_at"`
+	EndsAt          *time.Time      `json:"ends_at"`
+	TreasuryAddress *string         `json:"treasury_address"`
 }
 
 func orEmptyObject(raw json.RawMessage) json.RawMessage {
@@ -835,18 +847,19 @@ func (a *api) updateCampaign(c *gin.Context) {
 	}
 
 	update := campaignUpdate{
-		Name:           campaign.Name,
-		Description:    campaign.Description,
-		Sponsor:        campaign.Sponsor,
-		RewardAsset:    campaign.RewardAsset,
-		Budget:         campaign.Budget,
-		MaxRewardPerPR: campaign.MaxRewardPerPR,
-		MinScore:       campaign.MinScore,
-		Eligibility:    orEmptyObject(campaign.Eligibility),
-		Scoring:        orEmptyObject(campaign.Scoring),
-		Status:         campaign.Status,
-		StartsAt:       campaign.StartsAt,
-		EndsAt:         campaign.EndsAt,
+		Name:            campaign.Name,
+		Description:     campaign.Description,
+		Sponsor:         campaign.Sponsor,
+		RewardAsset:     campaign.RewardAsset,
+		Budget:          campaign.Budget,
+		MaxRewardPerPR:  campaign.MaxRewardPerPR,
+		MinScore:        campaign.MinScore,
+		Eligibility:     orEmptyObject(campaign.Eligibility),
+		Scoring:         orEmptyObject(campaign.Scoring),
+		Status:          campaign.Status,
+		StartsAt:        campaign.StartsAt,
+		EndsAt:          campaign.EndsAt,
+		TreasuryAddress: campaign.TreasuryAddress,
 	}
 	if _, _, err := a.db.From("campaigns").Update(update, "minimal", "").Eq("id", id).Execute(); err != nil {
 		internalError(c, "update campaign", err)
@@ -934,6 +947,7 @@ func (a *api) deleteCampaign(c *gin.Context) {
 // and embeds the campaign so lists can show its name and reward asset.
 const executionColumns = "id,delivery_id,campaign_id,repository_full_name,pr_number,event,head_sha,status," +
 	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at," +
+	"author_login,recipient_wallet,payout_tx," +
 	"campaign:campaigns(id,name,reward_asset)"
 
 type executionCampaign struct {
@@ -962,6 +976,9 @@ type executionItem struct {
 	CreatedAt          string             `json:"created_at"`
 	StartedAt          *string            `json:"started_at"`
 	FinishedAt         *string            `json:"finished_at"`
+	AuthorLogin        *string            `json:"author_login"`     // PR author
+	RecipientWallet    *string            `json:"recipient_wallet"` // payout wallet (merged only)
+	PayoutTx           *string            `json:"payout_tx"`        // Solana transaction that paid the reward
 }
 
 type executionDetail struct {
@@ -975,8 +992,8 @@ type executionDetail struct {
 var executionStatuses = []string{statusQueued, statusRunning, statusCompleted, statusFailed, statusSkipped}
 
 type executionFilter struct {
-	campaignID, repo, status, event string
-	pr                              int
+	campaignID, repo, status, event, author string
+	pr                                      int
 }
 
 // writeExecutions responds with one page of executions matching f, newest first.
@@ -1007,6 +1024,9 @@ func (a *api) writeExecutions(c *gin.Context, f executionFilter) {
 		}
 		if f.event != "" {
 			q = q.Eq("event", f.event)
+		}
+		if f.author != "" {
+			q = q.Ilike("author_login", f.author) // GitHub logins are case-insensitive.
 		}
 		return q
 	}
@@ -1039,10 +1059,10 @@ func (a *api) writeExecutions(c *gin.Context, f executionFilter) {
 	})
 }
 
-// GET /api/executions?campaign_id=&repo=&pr=&status=&event=
+// GET /api/executions?campaign_id=&repo=&pr=&status=&event=&author=
 func (a *api) listExecutions(c *gin.Context) {
 	f := executionFilter{campaignID: c.Query("campaign_id"), repo: c.Query("repo"),
-		status: c.Query("status"), event: c.Query("event")}
+		status: c.Query("status"), event: c.Query("event"), author: c.Query("author")}
 	pr, err := queryInt(c, "pr", 0, 1, 1<<31-1)
 	switch {
 	case f.campaignID != "" && !uuidRe.MatchString(f.campaignID):
@@ -1059,6 +1079,9 @@ func (a *api) listExecutions(c *gin.Context) {
 		return
 	case f.event != "" && f.event != "opened" && f.event != "merged":
 		apiError(c, http.StatusBadRequest, "event must be opened or merged")
+		return
+	case f.author != "" && !githubLoginRe.MatchString(f.author):
+		apiError(c, http.StatusBadRequest, "author must be a GitHub login")
 		return
 	}
 	f.pr = pr
@@ -1132,4 +1155,44 @@ func (a *api) listPRExecutions(c *gin.Context) {
 		return
 	}
 	a.writeExecutions(c, executionFilter{campaignID: id, repo: repo, pr: number})
+}
+
+// GET /api/wallets/github/:login
+
+// GitHub logins: alphanumerics and single hyphens, at most 39 characters. Also keeps
+// ILIKE wildcards out of the author filter.
+var githubLoginRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+type contributorWalletItem struct {
+	GitHubUserID   int64   `json:"github_user_id"`
+	GitHubLogin    string  `json:"github_login"`
+	SolanaAddress  string  `json:"solana_address"`
+	PregeneratedAt *string `json:"pregenerated_at"`
+	CreatedAt      string  `json:"created_at"`
+}
+
+// getGitHubWallet returns the wallet rewards are sent to for a GitHub user. It only reads:
+// wallets are created when a merged PR is evaluated, never by this endpoint.
+func (a *api) getGitHubWallet(c *gin.Context) {
+	login := c.Param("login")
+	if !githubLoginRe.MatchString(login) {
+		apiError(c, http.StatusBadRequest, "login must be a GitHub login")
+		return
+	}
+	var rows []contributorWalletItem
+	_, err := a.db.From("contributor_wallets").
+		Select("github_user_id,github_login,solana_address,pregenerated_at,created_at", "", false).
+		Ilike("github_login", login).
+		Order("updated_at", &postgrest.OrderOpts{Ascending: false}).
+		Limit(1, "").
+		ExecuteTo(&rows)
+	if err != nil {
+		internalError(c, "load wallet", err)
+		return
+	}
+	if len(rows) == 0 {
+		apiError(c, http.StatusNotFound, "no wallet for this GitHub user yet")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
 }

@@ -8,6 +8,7 @@ import {
   formatReward,
   timeAgo,
 } from "@/lib/format"
+import { explorerTxUrl } from "@/lib/solana"
 import { cn } from "@/lib/utils"
 import { ExecutionStatusBadge } from "@/components/execution-status-badge"
 import {
@@ -100,12 +101,19 @@ export function ExecutionTable({
               </TableCell>
               {showPR && (
                 <TableCell>
-                  <Link
-                    href={prExecutionsHref(e)}
-                    className="relative z-10 underline-offset-4 hover:underline"
-                  >
-                    {e.repository_full_name}#{e.pr_number}
-                  </Link>
+                  <div className="flex flex-col gap-0.5">
+                    <Link
+                      href={prExecutionsHref(e)}
+                      className="relative z-10 underline-offset-4 hover:underline"
+                    >
+                      {e.repository_full_name}#{e.pr_number}
+                    </Link>
+                    {e.author_login && (
+                      <span className="text-muted-foreground">
+                        by @{e.author_login}
+                      </span>
+                    )}
+                  </div>
                 </TableCell>
               )}
               {showCampaign && (
@@ -148,18 +156,29 @@ export function ExecutionTable({
                   <span className="tabular-nums">
                     {formatReward(e.reward, e.campaign?.reward_asset)}
                   </span>
-                  {e.eligible !== null && (
-                    <span
-                      className={cn(
-                        e.settled ? "text-ev-push" : "text-muted-foreground"
-                      )}
+                  {e.payout_tx ? (
+                    <a
+                      href={explorerTxUrl(e.payout_tx)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="relative z-10 text-ev-push underline-offset-4 hover:underline"
                     >
-                      {e.settled
-                        ? "Settled"
-                        : e.eligible
-                          ? "Eligible"
-                          : "Not eligible"}
-                    </span>
+                      Paid on Solana ↗
+                    </a>
+                  ) : (
+                    e.eligible !== null && (
+                      <span
+                        className={cn(
+                          e.settled ? "text-ev-push" : "text-muted-foreground"
+                        )}
+                      >
+                        {e.settled
+                          ? "Settled"
+                          : e.eligible
+                            ? "Eligible"
+                            : "Not eligible"}
+                      </span>
+                    )
                   )}
                 </div>
               </TableCell>

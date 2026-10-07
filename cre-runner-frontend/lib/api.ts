@@ -145,6 +145,12 @@ export type Execution = {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  // GitHub login of the PR author.
+  author_login: string | null
+  // Solana wallet the reward goes to; resolved for merged PRs only.
+  recipient_wallet: string | null
+  // Solana transaction that paid the reward on-chain.
+  payout_tx: string | null
 }
 
 export type ExecutionDetail = Execution & {
@@ -229,6 +235,8 @@ export type UpdateCampaignInput = {
   starts_at?: string | null
   ends_at?: string | null
   repos?: string[]
+  // Vault of the on-chain campaign (Solana), recorded after it is created.
+  treasury_address?: string | null
 }
 
 type Query = Record<string, string | number | undefined | null>
@@ -366,6 +374,8 @@ export type ExecutionQuery = {
   pr?: number
   status?: ExecutionStatus
   event?: "opened" | "merged"
+  // GitHub login of the PR author, case-insensitive.
+  author?: string
 }
 
 export function listExecutions(query: ExecutionQuery = {}) {
@@ -376,6 +386,25 @@ export async function getExecution(id: string) {
   return (
     await request<{ data: ExecutionDetail }>(
       `/api/executions/${encodeURIComponent(id)}`
+    )
+  ).data
+}
+
+// The wallet cre-runner pays a GitHub user's rewards to. It exists once one of their
+// PRs was merged in an active campaign, even if they have never signed in.
+export type ContributorWallet = {
+  github_user_id: number
+  github_login: string
+  solana_address: string
+  // Set when cre-runner pregenerated the wallet before the user signed in.
+  pregenerated_at: string | null
+  created_at: string
+}
+
+export async function getGitHubWallet(login: string) {
+  return (
+    await request<{ data: ContributorWallet }>(
+      `/api/wallets/github/${encodeURIComponent(login)}`
     )
   ).data
 }

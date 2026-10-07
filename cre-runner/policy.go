@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/token2049-decentralizing/core/cre-runner/internal/solana"
 )
 
 // campaignRow is the part of public.campaigns an execution needs.
@@ -33,6 +35,8 @@ type workflowConfig struct {
 		CodeReviewer reviewerConfig `json:"codeReviewer"`
 		LLM          reviewerConfig `json:"llm"`
 	} `json:"reviewers"`
+	// Set per merged execution when Solana payouts are enabled; nil = decision only logged.
+	Solana *solana.Settings `json:"solana,omitempty"`
 }
 
 type campaignPolicy struct {

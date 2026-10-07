@@ -67,3 +67,31 @@ func TestGetExecution(t *testing.T) {
 	f.execRows = []map[string]any{}
 	require.Equal(t, http.StatusNotFound, do(r, http.MethodGet, "/api/executions/22222222-2222-2222-2222-222222222222", "").Code)
 }
+
+func TestExecutionsByAuthor(t *testing.T) {
+	f := &fakePostgREST{execRows: []map[string]any{fakeExecutionRow()}}
+	r := newCampaignTestAPI(t, f)
+	require.Equal(t, http.StatusOK, do(r, http.MethodGet, "/api/executions?author=Alice-Dev", "").Code)
+	require.Contains(t, f.requests[len(f.requests)-1], "author_login=ilike.Alice-Dev")
+	for _, bad := range []string{"a%25", "a_b", "-x", "a/b"} {
+		require.Equal(t, http.StatusBadRequest, do(r, http.MethodGet, "/api/executions?author="+bad, "").Code, bad)
+	}
+}
+
+func TestGetGitHubWallet(t *testing.T) {
+	f := &fakePostgREST{walletRows: []map[string]any{{
+		"github_user_id": 101, "github_login": "alice", "solana_address": "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",
+		"pregenerated_at": "2026-10-07T06:00:00+00:00", "created_at": "2026-10-07T06:00:00+00:00",
+	}}}
+	r := newCampaignTestAPI(t, f)
+
+	w := do(r, http.MethodGet, "/api/wallets/github/ALICE", "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, f.requests[len(f.requests)-1], "github_login=ilike.ALICE")
+	require.Contains(t, w.Body.String(), "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV")
+	require.NotContains(t, w.Body.String(), "privy_user_id")
+
+	f.walletRows = []map[string]any{}
+	require.Equal(t, http.StatusNotFound, do(r, http.MethodGet, "/api/wallets/github/bob", "").Code)
+	require.Equal(t, http.StatusBadRequest, do(r, http.MethodGet, "/api/wallets/github/a%25", "").Code)
+}

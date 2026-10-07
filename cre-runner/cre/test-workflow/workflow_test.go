@@ -170,6 +170,20 @@ func TestNotesDoNotChangeHash(t *testing.T) {
 	require.Equal(t, a.EvaluationHash, b.EvaluationHash)
 }
 
+// The recipient is attested: it changes the hash and reaches the settlement.
+func TestRecipientWalletIsHashedAndSettled(t *testing.T) {
+	mockAPIs(t, 91)
+	a, _, err := run(t, request("merged"))
+	require.NoError(t, err)
+
+	withWallet := request("merged")
+	withWallet["recipient_wallet"] = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+	b, rt, err := run(t, withWallet)
+	require.NoError(t, err)
+	require.NotEqual(t, a.EvaluationHash, b.EvaluationHash)
+	require.True(t, logsContain(rt, "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"))
+}
+
 func TestOpenedNeverSettles(t *testing.T) {
 	mockAPIs(t, 91)
 	_, rt, err := run(t, request("opened"))

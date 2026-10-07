@@ -47,6 +47,15 @@ func validateConfig(c *Config) error {
 			return fmt.Errorf("campaign.reward: %w", err)
 		}
 	}
+	if s := c.Solana; s != nil {
+		if s.ChainSelector == 0 {
+			return errors.New("solana.chainSelector is required")
+		}
+		if _, err := parseKeys(map[string]string{"solana.programId": s.ProgramID, "solana.forwarderProgram": s.ForwarderProgram,
+			"solana.forwarderState": s.ForwarderState, "solana.mint": s.Mint, "solana.tokenProgram": s.TokenProgram}); err != nil {
+			return err
+		}
+	}
 	if c.Mode == ModeProduction {
 		switch {
 		case len(c.AuthorizedKeys) == 0:
@@ -170,7 +179,7 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 		return "", err
 	}
 	// notes are excluded on purpose: they must not change the evaluation.
-	eHash, err := hashJSON(map[string]any{
+	hashed := map[string]any{
 		"repository":  req.Repository,
 		"pr_number":   req.PRNumber,
 		"campaign_id": req.CampaignID,
@@ -182,18 +191,25 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 		"reward":      reward.String(),
 		"policy_hash": pHash,
 		"scorecard":   card,
-	})
+	}
+	// Only when set, so evaluations without a recipient keep their hash.
+	if req.RecipientWallet != "" {
+		hashed["recipient_wallet"] = req.RecipientWallet
+	}
+	eHash, err := hashJSON(hashed)
 	if err != nil {
 		return "", err
 	}
 
 	// Only a merged, eligible PR moves money. "opened" is informational.
+	var payoutTx string
 	if req.Event == "merged" && eligible && reward.Sign() > 0 {
-		err := submitRewardDecision(runtime, RewardDecision{
+		payoutTx, err = submitRewardDecision(runtime, cfg.Solana, RewardDecision{
 			CampaignID:     req.CampaignID,
 			Repository:     req.Repository,
 			PRNumber:       req.PRNumber,
 			Contributor:    evidence.Author,
+			Recipient:      req.RecipientWallet,
 			Score:          score,
 			Reward:         reward,
 			EvaluationHash: eHash,
@@ -211,6 +227,7 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 		EvaluationHash: eHash,
 		PolicyHash:     pHash,
 		Scorecard:      card,
+		PayoutTx:       payoutTx,
 	})
 	if err != nil {
 		return "", err

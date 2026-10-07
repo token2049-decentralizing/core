@@ -10,7 +10,6 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -68,8 +67,6 @@ const (
 	minAppealChars = 10
 	maxAppealChars = 2000
 )
-
-var githubLoginRe = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
 
 type appealExecution struct {
 	ID                 string          `json:"id"`

@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-contrib_oracle = "7b2qXnKKqskHKYZRCiKXohb6txqV3FYcSwSHXjdyGcSY"
+contrib_oracle = "FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA"
 
 [provider]
 cluster = "devnet"
