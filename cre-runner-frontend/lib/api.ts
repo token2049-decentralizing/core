@@ -151,6 +151,8 @@ export type Execution = {
   recipient_wallet: string | null
   // Solana transaction that paid the reward on-chain.
   payout_tx: string | null
+  // Execution this one is a manual rerun of.
+  rerun_of: string | null
 }
 
 export type ExecutionDetail = Execution & {
@@ -433,6 +435,61 @@ export function listPRExecutions(
     `/api/campaigns/${encodeURIComponent(campaignId)}/repos/${repoPath(repo)}/prs/${number}/executions`,
     { query }
   )
+}
+
+// Runs the execution again as a new execution (at the PR's current head); returns its id.
+export async function rerunExecution(id: string) {
+  return (
+    await request<{ data: { id: string; rerun_of: string } }>(
+      `/api/executions/${encodeURIComponent(id)}/rerun`,
+      { method: "POST" }
+    )
+  ).data
+}
+
+export type PRCheck = {
+  name: string
+  status: string
+  conclusion: string | null
+}
+
+export type PRLinkedIssue = {
+  number: number
+  url: string
+  title: string | null // null: missing or not readable
+  state: string | null
+  is_pull_request: boolean
+}
+
+// Live pull request state from GitHub, judged like the CRE workflow judges it.
+export type PRStatus = {
+  repository_full_name: string
+  number: number
+  title: string
+  html_url: string
+  state: "open" | "closed"
+  draft: boolean
+  merged: boolean
+  merged_at: string | null
+  author_login: string
+  head_sha: string
+  base_ref: string
+  // What CRE counts: "fixes/closes/resolves #N" in the PR description.
+  linked_issues: PRLinkedIssue[]
+  // What GitHub links (closing keywords + Development sidebar); null if unavailable.
+  github_linked_issues: number[] | null
+  ci_status: "PASS" | "FAIL" | "UNKNOWN"
+  checks: PRCheck[]
+  approvals: number
+  fetched_at: string
+}
+
+export async function getPRStatus(repo: string, number: number) {
+  return (
+    await request<{ data: PRStatus }>(
+      `/api/repos/${repoPath(repo)}/prs/${number}/status`
+    )
+  ).data
 }
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError }

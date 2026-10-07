@@ -72,7 +72,10 @@ func (f *fakePostgREST) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.repos = append(f.repos, row.RepositoryFullName)
 		}
 		w.WriteHeader(http.StatusCreated)
-	case "HEAD cre_executions", "GET cre_executions":
+	case "HEAD cre_executions":
+		// Count-only queries (in-flight and delete checks) report f.executions.
+		w.Header().Set("Content-Range", "*/"+itoa(f.executions))
+	case "GET cre_executions":
 		w.Header().Set("Content-Range", "*/"+itoa(max(f.executions, len(f.execRows))))
 		rows := f.execRows
 		if rows == nil {

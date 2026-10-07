@@ -126,6 +126,7 @@ type executionRow struct {
 	RunnerInstance     string          `json:"runner_instance"`
 	AuthorLogin        *string         `json:"author_login"`
 	AuthorGitHubID     *int64          `json:"author_github_id"`
+	RerunOf            *string         `json:"rerun_of,omitempty"` // manual rerun of this execution
 }
 
 // contributorWallet is a row in public.contributor_wallets.
@@ -247,7 +248,7 @@ type warmer interface {
 // payoutPreparer reads the campaign on Solana and creates the recipient's token account
 // (internal/solana).
 type payoutPreparer interface {
-	Prepare(ctx context.Context, campaignID, recipient string) (*solana.Settings, error)
+	Prepare(ctx context.Context, campaignID, asset, recipient string) (*solana.Settings, error)
 }
 
 // walletResolver finds or pregenerates a GitHub user's Solana wallet (internal/privy).
@@ -330,6 +331,30 @@ func (x *executor) Submit(t *prTrigger) {
 }
 
 func (x *executor) execute(t *prTrigger, c campaignRow) {
+	row, req, log := x.newExecution(t, c, "")
+	if err := x.store.Insert(row); err != nil {
+		log.Error("record execution failed", "error", err)
+		return
+	}
+	x.process(row, req, t, c, log)
+}
+
+// Start records an execution for one campaign and runs it in the background; it returns
+// the execution id once the row exists. rerunOf links a manual rerun to its original.
+func (x *executor) Start(t *prTrigger, c campaignRow, rerunOf string) (string, error) {
+	row, req, log := x.newExecution(t, c, rerunOf)
+	if err := x.store.Insert(row); err != nil {
+		return "", err
+	}
+	x.wg.Add(1)
+	go func() {
+		defer x.wg.Done()
+		x.process(row, req, t, c, log)
+	}()
+	return row.ID, nil
+}
+
+func (x *executor) newExecution(t *prTrigger, c campaignRow, rerunOf string) (*executionRow, *evaluationRequest, *slog.Logger) {
 	req := &evaluationRequest{Repository: t.Repository, PRNumber: t.PRNumber, CampaignID: c.ID, Event: t.Event, HeadSHA: t.HeadSHA}
 	reqJSON, _ := json.Marshal(req)
 	row := &executionRow{
@@ -349,12 +374,19 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 	if t.AuthorLogin != "" {
 		row.AuthorLogin, row.AuthorGitHubID = &t.AuthorLogin, &t.AuthorID
 	}
+	if rerunOf != "" {
+		row.RerunOf = &rerunOf
+	}
 	log := x.log.With("execution_id", row.ID, "delivery", t.DeliveryID, "campaign", c.ID,
 		"repository", t.Repository, "pr", t.PRNumber, "event", t.Event)
-	if err := x.store.Insert(row); err != nil {
-		log.Error("record execution failed", "error", err)
-		return
+	if rerunOf != "" {
+		log = log.With("rerun_of", rerunOf)
 	}
+	return row, req, log
+}
+
+// process runs a recorded execution to a terminal status.
+func (x *executor) process(row *executionRow, req *evaluationRequest, t *prTrigger, c campaignRow, log *slog.Logger) {
 	fail := func(msg string) {
 		log.Warn("execution failed", "error", msg)
 		x.finish(log, row.ID, &executionUpdate{Status: statusFailed, Error: &msg})
@@ -421,7 +453,7 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 		}
 		// Not settled in the database unless paid on-chain: fail so the PR can be retried
 		// (redeliver the webhook) once the campaign is created and funded on Solana.
-		settings, err := x.payouts.Prepare(x.ctx, c.ID, req.RecipientWallet)
+		settings, err := x.payouts.Prepare(x.ctx, c.ID, c.RewardAsset, req.RecipientWallet)
 		if err != nil {
 			if x.ctx.Err() != nil {
 				fail(errInterrupted)

@@ -5,6 +5,7 @@ import { attempt, getCampaign, listRepos } from "@/lib/api"
 import { ApiErrorState } from "@/components/api-error-state"
 import { CampaignForm } from "@/components/campaign-form"
 import { PageBody, PageHeader } from "@/components/page"
+import { RequireWallet } from "@/components/require-wallet"
 
 export async function generateMetadata(
   props: PageProps<"/campaigns/[id]/edit">
@@ -42,12 +43,14 @@ export default async function EditCampaignPage(
         title={`Edit ${campaign.data.name}`}
         description="Changes apply to the next CRE evaluation. Past executions keep the policy they ran with."
       />
-      <CampaignForm
-        campaign={campaign.data}
-        knownRepos={
-          repos.ok ? repos.data.map((r) => r.repository_full_name) : []
-        }
-      />
+      <RequireWallet action="edit this campaign">
+        <CampaignForm
+          campaign={campaign.data}
+          knownRepos={
+            repos.ok ? repos.data.map((r) => r.repository_full_name) : []
+          }
+        />
+      </RequireWallet>
     </PageBody>
   )
 }

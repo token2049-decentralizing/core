@@ -121,7 +121,7 @@ func setup(t *testing.T) *testEnv {
 		ForwarderProgram: solanago.MustPublicKeyFromBase58(MockForwarderProgram),
 		ForwarderState:   solanago.MustPublicKeyFromBase58(MockForwarderState),
 	}
-	env := &testEnv{payouts: p, rpc: f, mint: solanago.NewWallet().PublicKey(), recipient: solanago.NewWallet().PublicKey()}
+	env := &testEnv{payouts: p, rpc: f, mint: RewardMints["USDC"], recipient: solanago.NewWallet().PublicKey()}
 	id, _ := uuidBytes(campaignUUID)
 	env.campaign, err = p.pda([]byte("campaign"), id[:])
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func setup(t *testing.T) *testEnv {
 
 func TestPrepareCreatesRecipientTokenAccount(t *testing.T) {
 	env := setup(t)
-	s, err := env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	s, err := env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.NoError(t, err)
 	require.Equal(t, &Settings{ChainSelector: DevnetChainSelector, ProgramID: env.payouts.ProgramID.String(),
 		ForwarderProgram: MockForwarderProgram, ForwarderState: MockForwarderState,
@@ -155,15 +155,20 @@ func TestPrepareSkipsExistingTokenAccount(t *testing.T) {
 	env := setup(t)
 	ata, _, _ := solanago.FindAssociatedTokenAddress(env.recipient, env.mint)
 	env.rpc.accounts[ata.String()] = fakeAccount{owner: solanago.TokenProgramID, data: make([]byte, 165)}
-	_, err := env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	_, err := env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.NoError(t, err)
 	require.Empty(t, env.rpc.sent)
+}
+
+func TestRewardMints(t *testing.T) {
+	require.Equal(t, "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", RewardMints["USDC"].String())
+	require.Equal(t, "So11111111111111111111111111111111111111112", RewardMints["SOL"].String())
 }
 
 func TestPrepareToken2022Mint(t *testing.T) {
 	env := setup(t)
 	env.rpc.accounts[env.mint.String()] = fakeAccount{owner: solanago.Token2022ProgramID, data: make([]byte, 82)}
-	s, err := env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	s, err := env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.NoError(t, err)
 	require.Equal(t, solanago.Token2022ProgramID.String(), s.TokenProgram)
 }
@@ -171,22 +176,31 @@ func TestPrepareToken2022Mint(t *testing.T) {
 func TestPrepareRejects(t *testing.T) {
 	env := setup(t)
 	delete(env.rpc.accounts, env.campaign.String())
-	_, err := env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	_, err := env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.True(t, errors.Is(err, ErrCampaignNotOnChain), err)
 
 	env = setup(t)
 	env.rpc.accounts[env.campaign.String()] = fakeAccount{owner: env.payouts.ProgramID, data: campaignData(env.mint, 1)} // Paused
-	_, err = env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.ErrorContains(t, err, "not active")
 
 	env = setup(t)
 	env.rpc.accounts[env.campaign.String()] = fakeAccount{owner: env.payouts.ProgramID, data: make([]byte, 200)}
-	_, err = env.payouts.Prepare(context.Background(), campaignUUID, env.recipient.String())
+	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
 	require.ErrorContains(t, err, "not a contrib_oracle campaign")
 
-	_, err = env.payouts.Prepare(context.Background(), "not-a-uuid", env.recipient.String())
+	// A campaign created with another token is never paid from.
+	env = setup(t)
+	other := solanago.NewWallet().PublicKey()
+	env.rpc.accounts[env.campaign.String()] = fakeAccount{owner: env.payouts.ProgramID, data: campaignData(other, campaignStatusActive)}
+	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "USDC", env.recipient.String())
+	require.ErrorContains(t, err, "not devnet USDC")
+	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "ETH", env.recipient.String())
+	require.ErrorContains(t, err, "no Solana mint")
+
+	_, err = env.payouts.Prepare(context.Background(), "not-a-uuid", "USDC", env.recipient.String())
 	require.Error(t, err)
-	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "0xabc")
+	_, err = env.payouts.Prepare(context.Background(), campaignUUID, "USDC", "0xabc")
 	require.Error(t, err)
 	require.Empty(t, env.rpc.sent)
 }

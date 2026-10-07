@@ -947,7 +947,7 @@ func (a *api) deleteCampaign(c *gin.Context) {
 // and embeds the campaign so lists can show its name and reward asset.
 const executionColumns = "id,delivery_id,campaign_id,repository_full_name,pr_number,event,head_sha,status," +
 	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at," +
-	"author_login,recipient_wallet,payout_tx," +
+	"author_login,recipient_wallet,payout_tx,rerun_of," +
 	"campaign:campaigns(id,name,reward_asset)"
 
 type executionCampaign struct {
@@ -979,6 +979,7 @@ type executionItem struct {
 	AuthorLogin        *string            `json:"author_login"`     // PR author
 	RecipientWallet    *string            `json:"recipient_wallet"` // payout wallet (merged only)
 	PayoutTx           *string            `json:"payout_tx"`        // Solana transaction that paid the reward
+	RerunOf            *string            `json:"rerun_of"`         // execution this one reran
 }
 
 type executionDetail struct {

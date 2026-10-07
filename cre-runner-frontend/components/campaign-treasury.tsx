@@ -289,7 +289,9 @@ function Treasury({
                 async (s) => {
                   const expected = REWARD_MINT[campaign.reward_asset]
                   if (!expected)
-                    throw new Error(`${campaign.reward_asset} campaigns can't be funded on Solana.`)
+                    throw new Error(
+                      `${campaign.reward_asset} campaigns can't be funded on Solana.`
+                    )
                   const mint = await fetchMint(expected)
                   if (mint.decimals !== decimals)
                     throw new Error(

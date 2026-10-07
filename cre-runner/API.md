@@ -26,6 +26,8 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 12 | GET  | `/api/executions/{id}` | 单个 CRE 执行详情（含发给 workflow 的请求、评分明细、复核请求） |
 | 13 | POST | `/api/executions/{id}/appeals` | 对评分发起人工复核：在 PR 下评论并 @ 复核人 |
 | 14 | GET  | `/api/wallets/github/{login}` | 某 GitHub 用户的收款钱包（只读） |
+| 15 | GET  | `/api/repos/{owner}/{repo}/prs/{number}/status` | 从 GitHub 实时读取 PR 状态（merged、CI、approvals、linked issue） |
+| 16 | POST | `/api/executions/{id}/rerun` | 重新执行某次 execution（新建一条执行，`rerun_of` 指向原执行） |
 
 错误码：
 
@@ -866,6 +868,41 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 
 ---
 
+## 15. PR 实时状态
+
+`GET /api/repos/{owner}/{repo}/prs/{number}/status`
+
+用 GitHub App 实时读取 PR，判断方式和 CRE workflow 完全一致，显示的就是下一次评估会看到的状态。
+
+| 字段 | 说明 |
+|------|------|
+| `state` / `draft` / `merged` / `merged_at` | PR 状态 |
+| `head_sha` | 当前 head commit |
+| `linked_issues` | **CRE 认可的关联 issue**：PR 描述里的 `close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved #N`（不区分大小写）。每项带 `title` / `state`（issue 不存在或不可读时为 `null`，但仍然算数）、`is_pull_request` |
+| `github_linked_issues` | GitHub 自己认定的关联 issue（含 Development 侧边栏手动关联的）；不在 `linked_issues` 里的**不算数**。读不到时为 `null` |
+| `ci_status` | `PASS`：head commit 上所有 check run 都完成且为 success/neutral/skipped；`FAIL`：有完成但失败的；`UNKNOWN`：没有 check run 或仍在运行 |
+| `checks` | check run 列表（name / status / conclusion） |
+| `approvals` | 给过 APPROVED 的不同 reviewer 数 |
+| `fetched_at` | 读取时间 |
+
+没有 GitHub 凭据时返回 503，GitHub 读取失败返回 502。
+
+---
+
+## 16. 重新执行
+
+`POST /api/executions/{id}/rerun`
+
+用同一个 campaign 和事件（`opened` / `merged`）重新评估这次执行的 PR，在 PR **当前**的 head 上执行，所以修改 PR 描述（比如补上 `Fixes #N`）或推新 commit 后重跑能拿到新状态。原执行保持不变，新执行的 `rerun_of` 指向它。成功返回 `202`：
+
+```json
+{ "data": { "id": "<新 execution id>", "rerun_of": "<原 execution id>" } }
+```
+
+返回 409 的情况：原执行还在 `queued` / `running`；`merged` 且已结算（不会重复付款）；同一个 campaign + PR 已有执行在排队或运行；campaign 不是 active 或不在时间窗内；原执行是 `merged` 但 PR 现在不是 merged。CRE 执行未启用时返回 503。
+
+---
+
 ## 数据库
 
 表结构见 `migrations/`：
@@ -876,6 +913,7 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 - `004_scorecards_appeals.sql`：`cre_executions.scorecard` 列和复核请求表 `cre_execution_appeals`（**部署前先执行**）
 - `005_contributor_wallets.sql`：执行记录的作者和收款钱包，`contributor_wallets` 表
 - `006_payout_tx.sql`：`cre_executions.payout_tx`，链上发奖的 Solana 交易
+- `007_execution_reruns.sql`：`cre_executions.rerun_of`（接口 16）。**部署新 runner 前先执行**：执行列表会查询这一列
 
 ---
 

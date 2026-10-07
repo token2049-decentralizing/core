@@ -29,6 +29,13 @@ const (
 	campaignAccountMinLen = 161
 )
 
+// RewardMints are the only reward tokens paid out, per campaign asset (Solana devnet):
+// Circle's devnet USDC and wrapped SOL (the native mint, same address on every cluster).
+var RewardMints = map[string]solanago.PublicKey{
+	"USDC": solanago.MustPublicKeyFromBase58("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"),
+	"SOL":  solanago.WrappedSol, // So111…112 (solanago.SolMint is So111…111, not the native mint)
+}
+
 // Anchor discriminator of the Campaign account (idl/contrib_oracle.json).
 var campaignDiscriminator = []byte{50, 40, 49, 11, 157, 220, 229, 192}
 
@@ -83,8 +90,13 @@ func (p *Payouts) pda(seeds ...[]byte) (solanago.PublicKey, error) {
 }
 
 // Prepare returns the workflow's Solana settings for a campaign and creates the
-// recipient's token account for the campaign's mint if needed.
-func (p *Payouts) Prepare(ctx context.Context, campaignUUID, recipient string) (*Settings, error) {
+// recipient's token account for the campaign's mint if needed. The on-chain campaign must
+// hold the devnet token of the campaign's reward asset (RewardMints).
+func (p *Payouts) Prepare(ctx context.Context, campaignUUID, asset, recipient string) (*Settings, error) {
+	want, ok := RewardMints[asset]
+	if !ok {
+		return nil, fmt.Errorf("reward asset %q has no Solana mint", asset)
+	}
 	id, err := uuidBytes(campaignUUID)
 	if err != nil {
 		return nil, err
@@ -111,6 +123,9 @@ func (p *Payouts) Prepare(ctx context.Context, campaignUUID, recipient string) (
 	}
 	if status != campaignStatusActive {
 		return nil, fmt.Errorf("campaign %s is not active on Solana", campaign)
+	}
+	if !mint.Equals(want) {
+		return nil, fmt.Errorf("campaign %s holds mint %s, not devnet %s (%s)", campaign, mint, asset, want)
 	}
 
 	mintData, tokenProgram, err := p.account(ctx, mint)
