@@ -166,3 +166,24 @@ func TestSimulationLimitsFile(t *testing.T) {
 	require.Equal(t, "1kb", limits.ChainWrite.Solana.ReportSizeLimit)
 	require.Equal(t, "5m0s", limits.ExecutionTimeout)
 }
+
+// A multi-line error (an RPC error dump with program logs) is kept whole, not cut at line one.
+func TestParseSimulateOutputMultiLineError(t *testing.T) {
+	out := strings.Join([]string{
+		"2026-10-07T14:25:00Z [SIMULATION] Running trigger trigger=http-trigger@1.0.0-alpha",
+		`✗ workflow execution failed: solana payout failed (TX_STATUS_FATAL): (*jsonrpc.RPCError)(0x1)({`,
+		` Code: (int) -32002,`,
+		` Message: (string) (len=90) "Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1772",`,
+		` Data: (map[string]interface {}) { "logs": ["Program FSy2 invoke [2]", "AnchorError: RecipientMismatch"] }`,
+		`})`,
+		"",
+		"╭────────╮",
+	}, "\n")
+	_, err := parseSimulateOutput(out)
+	var ee *evalError
+	require.ErrorAs(t, err, &ee)
+	require.Contains(t, ee.msg, "custom program error: 0x1772")
+	require.Contains(t, ee.msg, "RecipientMismatch")
+	require.NotContains(t, ee.msg, "\n")
+	require.NotContains(t, ee.msg, "╭")
+}
