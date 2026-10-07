@@ -1,0 +1,18 @@
+[package]
+name = "contrib-oracle-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+contrib-oracle = { path = "../programs/contrib-oracle", features = ["no-entrypoint"] }
+anchor-lang = "0.31.1"
+litesvm = "=0.7.1"
+solana-keypair = "2.2"
+solana-signer = "2.2"
+solana-transaction = "2.2"
+solana-message = "2.2"
+solana-system-interface = { version = "1", features = ["bincode"] }
+spl-token = { version = "7", features = ["no-entrypoint"] }
+spl-associated-token-account = { version = "6", features = ["no-entrypoint"] }
+sha2 = "0.10"

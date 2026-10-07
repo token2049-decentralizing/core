@@ -1,0 +1,21 @@
+{
+  "name": "contrib-oracle-scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cli": "bun cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.31.1",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "anchor-litesvm": "0.2.1",
+    "litesvm": "0.3.3",
+    "typescript": "5"
+  }
+}

@@ -1,0 +1,13 @@
+[toolchain]
+anchor_version = "0.31.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+contrib_oracle = "7b2qXnKKqskHKYZRCiKXohb6txqV3FYcSwSHXjdyGcSY"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
