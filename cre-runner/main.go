@@ -39,6 +39,13 @@ func envInt(key string, def int) int {
 	return n
 }
 
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // runnerInstance identifies this machine in cre_executions.runner_instance.
 func runnerInstance() string {
 	if id := os.Getenv("FLY_MACHINE_ID"); id != "" {
@@ -159,7 +166,11 @@ func main() {
 	}
 
 	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{
+			"status":            "ok",
+			"executions":        executions != nil,
+			"webhook_signature": webhookSecret != "", // executions only start for signed deliveries
+		})
 	})
 
 	r.POST("/webhook", func(c *gin.Context) {
@@ -198,10 +209,15 @@ func main() {
 		log.Printf("webhook: saved delivery %s event=%s", ev.DeliveryID, ev.Event)
 		// Executions run in the background and record their own status in cre_executions.
 		// Unsigned deliveries never start one: they would let anyone spend LLM and CRE runs.
-		if executions != nil && ev.SignatureValid != nil {
-			if t := prTriggerFrom(ev); t != nil {
-				executions.Submit(t)
-			}
+		switch t := prTriggerFrom(ev); {
+		case executions == nil:
+			// Startup logged why executions are disabled.
+		case ev.SignatureValid == nil:
+			log.Printf("webhook: delivery %s: no CRE execution, GITHUB_WEBHOOK_SECRET is not set", ev.DeliveryID)
+		case t == nil:
+			log.Printf("webhook: delivery %s: no CRE execution for event=%s action=%s", ev.DeliveryID, ev.Event, deref(ev.Action))
+		default:
+			executions.Submit(t)
 		}
 		c.String(http.StatusOK, "ack")
 	})

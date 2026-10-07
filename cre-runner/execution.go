@@ -259,16 +259,22 @@ func (x *executor) Submit(t *prTrigger) {
 			return
 		}
 		now := time.Now()
+		started := 0
 		for _, c := range campaigns {
 			if !c.runningAt(now) {
+				x.log.Info("campaign outside its schedule, no execution", "delivery", t.DeliveryID,
+					"campaign", c.ID, "starts_at", c.StartsAt, "ends_at", c.EndsAt)
 				continue
 			}
+			started++
 			x.wg.Add(1)
 			go func() {
 				defer x.wg.Done()
 				x.execute(t, c)
 			}()
 		}
+		x.log.Info("pull request evaluation submitted", "delivery", t.DeliveryID, "repository", t.Repository,
+			"pr", t.PRNumber, "event", t.Event, "active_campaigns", len(campaigns), "executions", started)
 	}()
 }
 
