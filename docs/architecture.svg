@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">Kudoz — from contribution to reward</title>
+  <desc id="desc">Dashboard settings and GitHub webhooks enter the Go runner. Supabase stores campaigns and execution results. A Chainlink CRE workflow combines GitHub evidence, AI reviews, and campaign rules. Eligible merged pull requests produce a reward report. On Solana devnet, a mock forwarder delivers the report to the campaign program, which pays the contributor from a sponsor-funded vault. Privy resolves the contributor wallet. This diagram describes the implementation, not verified deployment status; CRE runs in simulation and the mock forwarder does not verify reports.</desc>
+  <defs>
+    <marker id="green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="#51c99c"/></marker>
+    <marker id="blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="#83a1ff"/></marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+      .title { fill: #edf3f8; font-size: 34px; font-weight: 700; }
+      .subtitle { fill: #a6b4c2; font-size: 19px; }
+      .heading { fill: #edf3f8; font-size: 23px; font-weight: 650; }
+      .body { fill: #a6b4c2; font-size: 18px; }
+      .small { fill: #a6b4c2; font-size: 16px; }
+      .label { fill: #51c99c; font-size: 16px; }
+      .blue-label { fill: #83a1ff; font-size: 16px; }
+      .group-label { fill: #a6b4c2; font-size: 15px; letter-spacing: 1.7px; }
+      .card { fill: #17232d; stroke: #51c99c; stroke-width: 2; }
+      .chain-card { fill: #17232d; stroke: #83a1ff; stroke-width: 2; }
+      .flow { fill: none; stroke: #51c99c; stroke-width: 2; marker-end: url(#green); stroke-linejoin: round; }
+      .pay { fill: none; stroke: #83a1ff; stroke-width: 2; marker-end: url(#blue); stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1440" height="960" rx="20" fill="#0e151b"/>
+  <text x="48" y="60" class="title">From contribution to reward.</text>
+  <text x="48" y="94" class="subtitle">GitHub provides evidence. Campaign rules decide. Solana settles.</text>
+  <circle cx="1105" cy="54" r="5" fill="#51c99c"/><text x="1118" y="60" class="small">Evaluation</text>
+  <circle cx="1248" cy="54" r="5" fill="#83a1ff"/><text x="1261" y="60" class="small">Settlement</text>
+
+  <!-- Application and workflow. Colors identify roles, not deployment status. -->
+  <rect x="374" y="146" width="610" height="404" rx="18" fill="#111c24" stroke="#2b3c49" stroke-width="2"/>
+  <rect x="374" y="700" width="1018" height="169" rx="18" fill="#111c24" stroke="#2b3c49" stroke-width="2"/>
+  <text x="400" y="180" class="group-label">CRE RUNNER · GO</text>
+  <rect x="48" y="203" width="250" height="105" rx="12" class="card"/>
+  <text x="70" y="243" class="heading">Dashboard</text>
+  <text x="70" y="275" class="body">Campaigns &amp; results</text>
+  <path d="M298 245H400" class="flow"/><text x="332" y="232" class="label">API</text>
+
+  <rect x="400" y="203" width="558" height="105" rx="12" class="card"/>
+  <text x="424" y="242" class="heading">Runner &amp; API</text>
+  <text x="424" y="274" class="body">Receive events · load policy · queue evaluation</text>
+  <path d="M958 250H1072" class="flow"/><text x="985" y="236" class="label">data</text>
+  <rect x="1072" y="203" width="320" height="105" rx="12" class="card"/>
+  <text x="1096" y="242" class="heading">Supabase</text>
+  <text x="1096" y="274" class="body">Campaigns &amp; executions</text>
+
+  <rect x="48" y="396" width="250" height="116" rx="12" class="card"/>
+  <text x="70" y="437" class="heading">GitHub</text>
+  <text x="70" y="468" class="body">PRs · issues · CI</text>
+  <text x="70" y="492" class="small">Reviews &amp; merge status</text>
+  <path d="M298 425H330V283H400" class="flow"/>
+  <text x="235" y="364" class="label">webhook</text>
+  <path d="M298 484H400" class="flow"/>
+  <text x="311" y="470" class="label">evidence</text>
+  <path d="M679 308V396" class="flow"/>
+  <text x="696" y="357" class="label">evaluate</text>
+
+  <rect x="400" y="396" width="558" height="116" rx="12" class="card"/>
+  <text x="424" y="435" class="heading">Chainlink CRE workflow</text>
+  <text x="424" y="467" class="body">Evidence + reviews + campaign rules</text>
+  <text x="424" y="493" class="small">Score → eligibility → reward report</text>
+  <path d="M1072 454H958" class="flow"/>
+  <text x="985" y="438" class="label">scores</text>
+  <rect x="1072" y="396" width="320" height="116" rx="12" class="card"/>
+  <text x="1096" y="435" class="heading">AI reviews</text>
+  <text x="1096" y="467" class="body">Code quality · issue relevance</text>
+  <text x="1096" y="493" class="small">Two review roles via an LLM</text>
+
+  <!-- Only eligible merged contributions enter the settlement path. -->
+  <path d="M526 512V752" class="pay"/>
+  <text x="548" y="599" class="blue-label">Eligible + merged</text>
+  <text x="548" y="625" class="small">Reward report</text>
+  <rect x="1072" y="561" width="320" height="96" rx="12" class="card"/>
+  <text x="1096" y="599" class="heading">Privy · GitHub sign-in</text>
+  <text x="1096" y="630" class="body">Creates a wallet when needed</text>
+  <path d="M1232 657V752" class="flow"/>
+  <text x="1246" y="686" class="label">recipient</text>
+
+  <text x="558" y="731" class="group-label">SOLANA DEVNET</text>
+  <rect x="400" y="752" width="252" height="91" rx="12" class="chain-card"/>
+  <text x="421" y="790" class="heading">Mock forwarder</text>
+  <text x="421" y="821" class="body">Delivers the report</text>
+  <path d="M652 797H720" class="pay"/>
+  <rect x="720" y="752" width="290" height="91" rx="12" class="chain-card"/>
+  <text x="741" y="790" class="heading">Program + vault</text>
+  <text x="741" y="821" class="body">Check limits · pay once</text>
+  <path d="M1010 797H1072" class="pay"/>
+  <rect x="1072" y="752" width="294" height="91" rx="12" class="chain-card"/>
+  <text x="1093" y="790" class="heading">Contributor</text>
+  <text x="1093" y="821" class="body">Receives campaign tokens</text>
+  <rect x="48" y="738" width="250" height="105" rx="12" class="chain-card"/>
+  <text x="70" y="778" class="heading">Sponsor</text>
+  <text x="70" y="809" class="body">Funds the campaign</text>
+  <path d="M298 790H336V892H865V843" class="pay"/>
+  <text x="395" y="886" class="blue-label">deposit tokens</text>
+
+  <text x="48" y="934" class="small">Implementation view · CRE simulation with optional devnet broadcast · mock forwarder does not verify reports</text>
+</svg>
