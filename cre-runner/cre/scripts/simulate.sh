@@ -16,5 +16,5 @@ export REVIEWER_TOKEN_VALUE="${REVIEWER_TOKEN:-}" # Workflow secret REVIEWER_TOK
 export CRE_SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://api.devnet.solana.com}" # project.yaml solana-devnet RPC.
 
 cre workflow simulate test-workflow --target "${CRE_TARGET:-local-simulation}" \
-  --non-interactive --trigger-index 0 \
+  --non-interactive --trigger-index 0 --limits simulation-limits.json \
   --http-payload "$(cat "${payload}")"
