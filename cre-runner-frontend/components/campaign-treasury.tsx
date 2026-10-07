@@ -384,7 +384,7 @@ function Treasury({
       {wrongMint && (
         <p className="text-destructive">
           This on-chain campaign holds a token that isn&apos;t devnet{" "}
-          {campaign.reward_asset}; cre-runner won&apos;t pay rewards from it.
+          {campaign.reward_asset}; Kudoz won&apos;t pay rewards from it.
         </p>
       )}
       {capMismatch && (

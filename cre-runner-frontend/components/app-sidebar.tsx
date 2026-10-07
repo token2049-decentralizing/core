@@ -25,7 +25,7 @@ export async function AppSidebar() {
           <SignalMark className="size-6 shrink-0" />
           <div className="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="font-heading text-sm font-bold tracking-tight">
-              cre-runner
+              Kudoz
             </span>
             <span className="truncate text-[11px] text-muted-foreground">
               PR rewards from GitHub activity

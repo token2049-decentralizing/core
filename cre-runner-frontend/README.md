@@ -1,21 +1,17 @@
-# Next.js template
+# Kudoz dashboard
 
-This is a Next.js template with shadcn/ui.
-
-## Adding components
-
-To add components to your app, run the following command:
+The web app at [kudoz.dev](https://kudoz.dev): repositories and their webhook activity, reward campaigns, CRE executions with score breakdowns, live PR status, and "My rewards" for contributors. Sponsors sign in with GitHub through Privy to manage campaigns and fund their Solana devnet treasury.
 
 ```bash
-npx shadcn@latest add button
+pnpm install
+pnpm dev        # http://localhost:3000
 ```
 
-This will place the ui components in the `components` directory.
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_API_BASE_URL` | Kudoz API (`cre-runner`), e.g. `https://cre-runner.fly.dev` |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | Privy app ID; without it, sign-in and campaign management are disabled |
+| `NEXT_PUBLIC_SOLANA_RPC_URL` | Solana devnet RPC (default public devnet, which rate-limits) |
+| `NEXT_PUBLIC_CONTRIB_ORACLE_PROGRAM_ID` | `contrib_oracle` program (default `FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA`) |
 
-## Using components
-
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button";
-```
+See [`../cre-runner/DEPLOY.md`](../cre-runner/DEPLOY.md) for the full setup.

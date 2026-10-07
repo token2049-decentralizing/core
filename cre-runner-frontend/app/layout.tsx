@@ -23,8 +23,10 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: { default: "cre-runner", template: "%s | cre-runner" },
-  description: "GitHub activity and PR reward campaigns",
+  title: { default: "Kudoz", template: "%s | Kudoz" },
+  description:
+    "Kudoz rewards merged GitHub pull requests on Solana. Campaigns, CRE evaluations and payouts.",
+  metadataBase: new URL("https://kudoz.dev"),
 }
 
 export default async function RootLayout({
