@@ -2539,3 +2539,5 @@ GitHub PR ──→ GitHub Action ──→ CRE
 而且我会把你原来“`runs-on: cre-runner-xxxxx`”这个设计保留为一个 **非常有特色的 Developer Experience**：开发者甚至可以只增加一行 `runs-on`，就把现有 GitHub PR pipeline 接入一个可奖励的 CRE evaluation network。真正生产版再演进成 GitHub App + managed runner。
 
 另外，一个很值得注意的产品定位变化是：**不要把 CodeRabbit 定义成“出钱的人”，而定义成 Campaign Sponsor / Reviewer Provider。** 这样未来不仅 CodeRabbit，任何 AI coding/review 公司、云厂商、SDK 公司、区块链协议、数据库公司都可以创建自己的 OSS campaign——这才有机会从一个 Hackathon demo 变成一个 marketplace。
+
+FIX TEST
