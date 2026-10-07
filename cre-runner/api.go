@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -56,6 +57,11 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/campaigns", a.listCampaigns)
 	g.GET("/campaigns/:id", a.getCampaign)
 	g.POST("/campaigns", a.createCampaign)
+	g.PATCH("/campaigns/:id", a.updateCampaign)
+	g.DELETE("/campaigns/:id", a.deleteCampaign)
+	g.GET("/campaigns/:id/repos/:owner/:repo/prs/:number/executions", a.listPRExecutions)
+	g.GET("/executions", a.listExecutions)
+	g.GET("/executions/:id", a.getExecution)
 }
 
 func apiError(c *gin.Context, status int, msg string) {
@@ -470,7 +476,8 @@ func positiveAmount(name string, n json.Number) (*big.Rat, error) {
 	return r, nil
 }
 
-func (req *createCampaignRequest) validate() (*campaignInsert, []string, error) {
+// validate checks the request; statuses lists what the caller may set.
+func (req *createCampaignRequest) validate(statuses []string) (*campaignInsert, []string, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		return nil, nil, errors.New("name is required")
@@ -506,8 +513,8 @@ func (req *createCampaignRequest) validate() (*campaignInsert, []string, error) 
 	if req.Status == "" {
 		req.Status = "draft"
 	}
-	if req.Status != "draft" && req.Status != "active" {
-		return nil, nil, errors.New(`status must be "draft" or "active"`)
+	if !slices.Contains(statuses, req.Status) {
+		return nil, nil, errors.New("status must be one of " + strings.Join(statuses, ", "))
 	}
 	if req.StartsAt != nil && req.EndsAt != nil && !req.EndsAt.After(*req.StartsAt) {
 		return nil, nil, errors.New("ends_at must be after starts_at")
@@ -553,7 +560,7 @@ func (a *api) createCampaign(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
-	campaign, repos, err := req.validate()
+	campaign, repos, err := req.validate([]string{"draft", "active"})
 	if err != nil {
 		apiError(c, http.StatusBadRequest, err.Error())
 		return
@@ -720,31 +727,396 @@ func (a *api) listCampaigns(c *gin.Context) {
 
 // GET /api/campaigns/:id
 
-func (a *api) getCampaign(c *gin.Context) {
-	id := c.Param("id")
+// loadCampaign returns the campaign with its "repos", or nil if there is none.
+func (a *api) loadCampaign(id string) (map[string]json.RawMessage, error) {
 	if !uuidRe.MatchString(id) {
-		// Not a UUID can't match any row; also avoids a Postgres cast error.
-		apiError(c, http.StatusNotFound, "campaign not found")
-		return
+		return nil, nil // Not a UUID can't match any row; also avoids a Postgres cast error.
 	}
-
 	var rows []map[string]json.RawMessage
 	_, err := a.db.From("campaigns").
 		Select(campaignColumns, "", false).
 		Eq("id", id).
 		Limit(1, "").
 		ExecuteTo(&rows)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	if err := flattenCampaignRepos(rows[0]); err != nil {
+		return nil, err
+	}
+	return rows[0], nil
+}
+
+func (a *api) getCampaign(c *gin.Context) {
+	row, err := a.loadCampaign(c.Param("id"))
 	if err != nil {
 		internalError(c, "load campaign", err)
 		return
 	}
-	if len(rows) == 0 {
+	if row == nil {
 		apiError(c, http.StatusNotFound, "campaign not found")
 		return
 	}
-	if err := flattenCampaignRepos(rows[0]); err != nil {
+	c.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+// PATCH /api/campaigns/:id
+
+// campaignUpdate writes every column, so cleared optional fields become null.
+type campaignUpdate struct {
+	Name           string          `json:"name"`
+	Description    *string         `json:"description"`
+	Sponsor        *string         `json:"sponsor"`
+	RewardAsset    string          `json:"reward_asset"`
+	Budget         json.Number     `json:"budget"`
+	MaxRewardPerPR json.Number     `json:"max_reward_per_pr"`
+	MinScore       *int            `json:"min_score"`
+	Eligibility    json.RawMessage `json:"eligibility"`
+	Scoring        json.RawMessage `json:"scoring"`
+	Status         string          `json:"status"`
+	StartsAt       *time.Time      `json:"starts_at"`
+	EndsAt         *time.Time      `json:"ends_at"`
+}
+
+func orEmptyObject(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+// updateCampaign applies the fields present in the body (null clears an optional field)
+// and validates the result like a new campaign. "repos", when present, replaces the set.
+func (a *api) updateCampaign(c *gin.Context) {
+	id := c.Param("id")
+	current, err := a.loadCampaign(id)
+	if err != nil {
 		internalError(c, "load campaign", err)
 		return
 	}
+	if current == nil {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
+	if err != nil {
+		apiError(c, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(body, &present); err != nil {
+		apiError(c, http.StatusBadRequest, "body must be a JSON object")
+		return
+	}
+
+	// Start from the stored campaign, then overlay the patch.
+	var req createCampaignRequest
+	stored, _ := json.Marshal(current)
+	if err := json.Unmarshal(stored, &req); err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	// Cloned: decoding the patch reuses req.Repos' backing array.
+	currentRepos := slices.Clone(req.Repos)
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		apiError(c, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if _, ok := present["repos"]; !ok {
+		req.Repos = currentRepos
+	}
+	campaign, repos, err := req.validate(campaignStatuses)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	update := campaignUpdate{
+		Name:           campaign.Name,
+		Description:    campaign.Description,
+		Sponsor:        campaign.Sponsor,
+		RewardAsset:    campaign.RewardAsset,
+		Budget:         campaign.Budget,
+		MaxRewardPerPR: campaign.MaxRewardPerPR,
+		MinScore:       campaign.MinScore,
+		Eligibility:    orEmptyObject(campaign.Eligibility),
+		Scoring:        orEmptyObject(campaign.Scoring),
+		Status:         campaign.Status,
+		StartsAt:       campaign.StartsAt,
+		EndsAt:         campaign.EndsAt,
+	}
+	if _, _, err := a.db.From("campaigns").Update(update, "minimal", "").Eq("id", id).Execute(); err != nil {
+		internalError(c, "update campaign", err)
+		return
+	}
+
+	// PostgREST can't span requests in one transaction: repos are synced after the campaign row.
+	var removed, added []string
+	for _, r := range currentRepos {
+		if !slices.Contains(repos, r) {
+			removed = append(removed, r)
+		}
+	}
+	for _, r := range repos {
+		if !slices.Contains(currentRepos, r) {
+			added = append(added, r)
+		}
+	}
+	if len(removed) > 0 {
+		if _, _, err := a.db.From("campaign_repos").Delete("minimal", "").
+			Eq("campaign_id", id).In("repository_full_name", removed).Execute(); err != nil {
+			internalError(c, "update repos", err)
+			return
+		}
+	}
+	if len(added) > 0 {
+		rows := make([]campaignRepoInsert, len(added))
+		for i, r := range added {
+			rows[i] = campaignRepoInsert{CampaignID: id, RepositoryFullName: r}
+		}
+		if _, _, err := a.db.From("campaign_repos").Insert(rows, false, "", "minimal", "").Execute(); err != nil {
+			internalError(c, "update repos", err)
+			return
+		}
+	}
+
+	row, err := a.loadCampaign(id)
+	if err != nil || row == nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+// DELETE /api/campaigns/:id
+
+// deleteCampaign removes a campaign and its repos. Campaigns with CRE executions are
+// payout history and cannot be deleted; end them instead.
+func (a *api) deleteCampaign(c *gin.Context) {
+	id := c.Param("id")
+	current, err := a.loadCampaign(id)
+	if err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	if current == nil {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	_, executions, err := a.db.From(executionsTable).Select("id", "exact", true).Eq("campaign_id", id).Execute()
+	if err != nil {
+		internalError(c, "delete campaign", err)
+		return
+	}
+	if executions > 0 {
+		apiError(c, http.StatusConflict, fmt.Sprintf(
+			"campaign has %d CRE executions and can't be deleted; set its status to ended instead", executions))
+		return
+	}
+	if _, _, err := a.db.From("campaigns").Delete("minimal", "").Eq("id", id).Execute(); err != nil {
+		if strings.Contains(err.Error(), "23503") { // An execution started meanwhile.
+			apiError(c, http.StatusConflict, "campaign has CRE executions and can't be deleted; set its status to ended instead")
+			return
+		}
+		internalError(c, "delete campaign", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// Executions: GET /api/executions, GET /api/executions/:id,
+// GET /api/campaigns/:id/repos/:owner/:repo/prs/:number/executions
+
+// executionColumns leaves out runner internals (request payload, runner_instance)
+// and embeds the campaign so lists can show its name and reward asset.
+const executionColumns = "id,delivery_id,campaign_id,repository_full_name,pr_number,event,head_sha,status," +
+	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at," +
+	"campaign:campaigns(id,name,reward_asset)"
+
+type executionCampaign struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RewardAsset string `json:"reward_asset"`
+}
+
+type executionItem struct {
+	ID                 string             `json:"id"`
+	DeliveryID         string             `json:"delivery_id"`
+	CampaignID         string             `json:"campaign_id"`
+	Campaign           *executionCampaign `json:"campaign"`
+	RepositoryFullName string             `json:"repository_full_name"`
+	PRNumber           int                `json:"pr_number"`
+	Event              string             `json:"event"`
+	HeadSHA            *string            `json:"head_sha"`
+	Status             string             `json:"status"`
+	Score              *int               `json:"score"`
+	Eligible           *bool              `json:"eligible"`
+	Reward             *string            `json:"reward"` // token base units
+	EvaluationHash     *string            `json:"evaluation_hash"`
+	PolicyHash         *string            `json:"policy_hash"`
+	Settled            bool               `json:"settled"`
+	Error              *string            `json:"error"`
+	CreatedAt          string             `json:"created_at"`
+	StartedAt          *string            `json:"started_at"`
+	FinishedAt         *string            `json:"finished_at"`
+}
+
+type executionDetail struct {
+	executionItem
+	Request        json.RawMessage `json:"request"` // HTTP trigger payload sent to the workflow
+	RunnerInstance *string         `json:"runner_instance"`
+}
+
+var executionStatuses = []string{statusQueued, statusRunning, statusCompleted, statusFailed, statusSkipped}
+
+type executionFilter struct {
+	campaignID, repo, status, event string
+	pr                              int
+}
+
+// writeExecutions responds with one page of executions matching f, newest first.
+func (a *api) writeExecutions(c *gin.Context, f executionFilter) {
+	page, err := queryInt(c, "page", 0, 0, 1_000_000)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	pageSize, err := queryInt(c, "page_size", defaultPageSize, 1, maxPageSize)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	filter := func(columns string, head bool) *postgrest.FilterBuilder {
+		q := a.db.From(executionsTable).Select(columns, "exact", head)
+		if f.campaignID != "" {
+			q = q.Eq("campaign_id", f.campaignID)
+		}
+		if f.repo != "" {
+			q = q.Eq("repository_full_name", f.repo)
+		}
+		if f.pr > 0 {
+			q = q.Eq("pr_number", strconv.Itoa(f.pr))
+		}
+		if f.status != "" {
+			q = q.Eq("status", f.status)
+		}
+		if f.event != "" {
+			q = q.Eq("event", f.event)
+		}
+		return q
+	}
+	var rows []executionItem
+	from := page * pageSize
+	total, err := filter(executionColumns, false).
+		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
+		Order("id", &postgrest.OrderOpts{Ascending: false}).
+		Range(from, from+pageSize-1, "").
+		ExecuteTo(&rows)
+	if isRangeError(err) {
+		rows = nil
+		_, total, err = filter("id", true).Execute()
+	}
+	if err != nil {
+		internalError(c, "load executions", err)
+		return
+	}
+	if rows == nil {
+		rows = []executionItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": rows,
+		"pagination": gin.H{
+			"page":      page,
+			"page_size": pageSize,
+			"total":     total,
+			"has_more":  int64(from+len(rows)) < total,
+		},
+	})
+}
+
+// GET /api/executions?campaign_id=&repo=&pr=&status=&event=
+func (a *api) listExecutions(c *gin.Context) {
+	f := executionFilter{campaignID: c.Query("campaign_id"), repo: c.Query("repo"),
+		status: c.Query("status"), event: c.Query("event")}
+	pr, err := queryInt(c, "pr", 0, 1, 1<<31-1)
+	switch {
+	case f.campaignID != "" && !uuidRe.MatchString(f.campaignID):
+		apiError(c, http.StatusBadRequest, "campaign_id must be a UUID")
+		return
+	case f.repo != "" && !repoFullNameRe.MatchString(f.repo):
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	case err != nil:
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	case f.status != "" && !slices.Contains(executionStatuses, f.status):
+		apiError(c, http.StatusBadRequest, "status must be one of "+strings.Join(executionStatuses, ", "))
+		return
+	case f.event != "" && f.event != "opened" && f.event != "merged":
+		apiError(c, http.StatusBadRequest, "event must be opened or merged")
+		return
+	}
+	f.pr = pr
+	a.writeExecutions(c, f)
+}
+
+// GET /api/executions/:id
+func (a *api) getExecution(c *gin.Context) {
+	id := c.Param("id")
+	if !uuidRe.MatchString(id) {
+		apiError(c, http.StatusNotFound, "execution not found")
+		return
+	}
+	var rows []executionDetail
+	_, err := a.db.From(executionsTable).
+		Select(executionColumns+",request,runner_instance", "", false).
+		Eq("id", id).
+		Limit(1, "").
+		ExecuteTo(&rows)
+	if err != nil {
+		internalError(c, "load execution", err)
+		return
+	}
+	if len(rows) == 0 {
+		apiError(c, http.StatusNotFound, "execution not found")
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
+}
+
+func (a *api) listPRExecutions(c *gin.Context) {
+	id := c.Param("id")
+	repo := c.Param("owner") + "/" + c.Param("repo")
+	number, err := strconv.Atoi(c.Param("number"))
+	switch {
+	case !uuidRe.MatchString(id):
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	case !repoFullNameRe.MatchString(repo):
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	case err != nil || number <= 0 || number > 1<<31-1:
+		apiError(c, http.StatusBadRequest, "number must be a positive integer")
+		return
+	}
+	if _, err := queryInt(c, "page_size", defaultPageSize, 1, maxPageSize); err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 404 for an unknown campaign; an empty list means the PR simply has no executions yet.
+	var campaigns []struct {
+		ID string `json:"id"`
+	}
+	if _, err := a.db.From("campaigns").Select("id", "", false).Eq("id", id).Limit(1, "").ExecuteTo(&campaigns); err != nil {
+		internalError(c, "load executions", err)
+		return
+	}
+	if len(campaigns) == 0 {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	a.writeExecutions(c, executionFilter{campaignID: id, repo: repo, pr: number})
 }

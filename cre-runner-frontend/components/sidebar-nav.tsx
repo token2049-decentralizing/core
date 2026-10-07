@@ -2,7 +2,12 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { RiAddLine, RiDashboard3Line, RiTrophyLine } from "@remixicon/react"
+import {
+  RiAddLine,
+  RiDashboard3Line,
+  RiPulseLine,
+  RiTrophyLine,
+} from "@remixicon/react"
 
 import type { Repo } from "@/lib/api"
 import { formatCount } from "@/lib/format"
@@ -44,6 +49,16 @@ export function SidebarNav() {
             >
               <RiTrophyLine />
               <span>Campaigns</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={pathname.startsWith("/executions")}
+              tooltip="CRE executions"
+              render={<Link href="/executions" />}
+            >
+              <RiPulseLine />
+              <span>CRE executions</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

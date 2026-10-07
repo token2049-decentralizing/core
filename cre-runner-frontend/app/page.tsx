@@ -3,14 +3,18 @@ import { RiAddLine, RiInboxLine } from "@remixicon/react"
 
 import {
   attempt,
+  isExecutionActive,
   listCampaigns,
+  listExecutions,
   listRepoEvents,
   listRepos,
   type RepoEvent,
 } from "@/lib/api"
 import { formatAmount, formatCount, formatDate, timeAgo } from "@/lib/format"
 import { ApiErrorState } from "@/components/api-error-state"
+import { AutoRefresh } from "@/components/auto-refresh"
 import { CampaignStatusBadge } from "@/components/campaign-status-badge"
+import { ExecutionTable } from "@/components/execution-table"
 import { PageBody, PageHeader, Section } from "@/components/page"
 import { SignalStrip } from "@/components/signal-strip"
 import { Button } from "@/components/ui/button"
@@ -32,12 +36,14 @@ import {
 
 const STRIP_REPOS = 8
 const STRIP_EVENTS = 48
+const RECENT_EXECUTIONS = 6
 
 export default async function OverviewPage() {
-  const [repos, recent, active] = await Promise.all([
+  const [repos, recent, active, executions] = await Promise.all([
     attempt(listRepos()),
     attempt(listCampaigns({ page_size: 5 })),
     attempt(listCampaigns({ status: "active", page_size: 1 })),
+    attempt(listExecutions({ page_size: RECENT_EXECUTIONS })),
   ])
 
   if (!repos.ok) {
@@ -65,8 +71,14 @@ export default async function OverviewPage() {
   const totalEvents = repos.data.reduce((sum, r) => sum + r.event_count, 0)
   const activeCount = active.ok ? active.data.pagination.total : null
 
+  // Rendered per request on the server: running durations count up to now.
+  const now = new Date().toISOString()
+
   return (
     <PageBody>
+      <AutoRefresh
+        active={executions.ok && executions.data.data.some(isExecutionActive)}
+      />
       <PageHeader
         title="Overview"
         description={
@@ -159,6 +171,30 @@ export default async function OverviewPage() {
               </TableBody>
             </Table>
           </div>
+        )}
+      </Section>
+
+      <Section
+        title="Latest CRE executions"
+        actions={
+          executions.ok &&
+          executions.data.pagination.total > 0 && (
+            <Link
+              href="/executions"
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              See all {executions.data.pagination.total}
+            </Link>
+          )
+        }
+      >
+        {executions.ok ? (
+          <ExecutionTable executions={executions.data.data} now={now} />
+        ) : (
+          <ApiErrorState
+            status={executions.error.status}
+            message={executions.error.message}
+          />
         )}
       </Section>
 

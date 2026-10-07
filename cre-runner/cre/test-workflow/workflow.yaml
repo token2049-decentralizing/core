@@ -1,0 +1,37 @@
+# ==========================================================================
+# CRE WORKFLOW SETTINGS FILE
+# ==========================================================================
+# local-simulation   simulate on your machine (stub reviewers unless you set URLs)
+# docker-simulation  used by the cre-runner image (it overrides the config per campaign with --config)
+# production-settings deploy target; config validation refuses stubs and empty authorizedKeys
+# local/docker targets are never deployed.
+
+# ==========================================================================
+local-simulation:
+  user-workflow:
+    workflow-name: "contriboracle-local"
+    deployment-registry: "private"
+  workflow-artifacts:
+    workflow-path: "."
+    config-path: "./config.local.json"
+    secrets-path: "../secrets.yaml"
+
+# ==========================================================================
+docker-simulation:
+  user-workflow:
+    workflow-name: "contriboracle-docker"
+    deployment-registry: "private"
+  workflow-artifacts:
+    workflow-path: "."
+    config-path: "./config.docker.json"
+    secrets-path: "../secrets.yaml"
+
+# ==========================================================================
+production-settings:
+  user-workflow:
+    workflow-name: "contriboracle-production"
+    # Before deploying, add: deployment-registry: "<id from `cre registry list`>"
+  workflow-artifacts:
+    workflow-path: "."
+    config-path: "./config.production.json"
+    secrets-path: "../secrets.yaml"

@@ -1,0 +1,24 @@
+# Local Docker run. Reads .env (same file `go run .` uses).
+# CRE auth without CRE_API_KEY: ./scripts/cre-login-env.sh >> .env
+services:
+  cre-runner:
+    build: .
+    image: cre-runner:dev
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file: .env
+    environment:
+      # Image paths win over local-dev values in .env.
+      PORT: "8080"
+      CRE_PROJECT_DIR: /app/cre
+      CRE_TARGET: docker-simulation
+      CRE_WASM: /app/cre/build/workflow.wasm
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+    volumes:
+      - ./github-app.pem:/run/secrets/github-app.pem:ro
+      # Seeded from CRE_LOGIN_YAML on first start; keeps the CLI's refreshed tokens across restarts.
+      - cre-session:/home/app/.cre
+    restart: unless-stopped
+
+volumes:
+  cre-session:

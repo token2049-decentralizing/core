@@ -114,6 +114,67 @@ export type CreateCampaignInput = {
   repos?: string[]
 }
 
+export const EXECUTION_STATUSES = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+] as const
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number]
+
+// One CRE workflow run for a (campaign, repo, PR), started by a pull_request webhook.
+export type Execution = {
+  id: string
+  delivery_id: string
+  campaign_id: string
+  campaign: { id: string; name: string; reward_asset: string } | null
+  repository_full_name: string
+  pr_number: number
+  event: "opened" | "merged"
+  head_sha: string | null
+  status: ExecutionStatus
+  score: number | null
+  eligible: boolean | null
+  // Token base units as a decimal string (USDC: 6 decimals, SOL: 9).
+  reward: string | null
+  evaluation_hash: string | null
+  policy_hash: string | null
+  settled: boolean
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export type ExecutionDetail = Execution & {
+  // HTTP trigger payload the runner sent to the workflow.
+  request: unknown
+  runner_instance: string | null
+}
+
+export function isExecutionActive(execution: Execution) {
+  return execution.status === "queued" || execution.status === "running"
+}
+
+// PATCH body: only the keys sent are changed, null clears an optional field and
+// "repos" replaces the attached repositories.
+export type UpdateCampaignInput = {
+  name?: string
+  description?: string | null
+  sponsor?: string | null
+  reward_asset?: "USDC" | "SOL"
+  budget?: string
+  max_reward_per_pr?: string
+  min_score?: number | null
+  eligibility?: Record<string, unknown> | null
+  scoring?: Record<string, unknown> | null
+  status?: CampaignStatus
+  starts_at?: string | null
+  ends_at?: string | null
+  repos?: string[]
+}
+
 type Query = Record<string, string | number | undefined | null>
 
 function buildUrl(path: string, query?: Query) {
@@ -219,6 +280,60 @@ export async function createCampaign(input: CreateCampaignInput) {
       body: JSON.stringify(input),
     })
   ).data
+}
+
+export async function updateCampaign(id: string, input: UpdateCampaignInput) {
+  return (
+    await request<{ data: Campaign }>(
+      `/api/campaigns/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    )
+  ).data
+}
+
+// Fails with 409 when the campaign has CRE executions; end it instead.
+export async function deleteCampaign(id: string) {
+  await request<null>(`/api/campaigns/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  })
+}
+
+export type ExecutionQuery = {
+  page?: number
+  page_size?: number
+  campaign_id?: string
+  repo?: string
+  pr?: number
+  status?: ExecutionStatus
+  event?: "opened" | "merged"
+}
+
+export function listExecutions(query: ExecutionQuery = {}) {
+  return request<Paginated<Execution>>("/api/executions", { query })
+}
+
+export async function getExecution(id: string) {
+  return (
+    await request<{ data: ExecutionDetail }>(
+      `/api/executions/${encodeURIComponent(id)}`
+    )
+  ).data
+}
+
+export function listPRExecutions(
+  campaignId: string,
+  repo: string,
+  number: number,
+  query: { page?: number; page_size?: number } = {}
+) {
+  return request<Paginated<Execution>>(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/repos/${repoPath(repo)}/prs/${number}/executions`,
+    { query }
+  )
 }
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError }

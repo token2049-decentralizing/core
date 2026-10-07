@@ -5,6 +5,10 @@
 
 app = 'cre-runner'
 primary_region = 'sin'
+# Executions run after the webhook is acknowledged; on stop the runner waits for them
+# (SHUTDOWN_GRACE_SECONDS) before exiting, so give it time. Fly allows at most 5m.
+kill_signal = 'SIGTERM'
+kill_timeout = '5m'
 
 [build]
 
@@ -20,7 +24,7 @@ primary_region = 'sin'
   processes = ['app']
 
 [[vm]]
+  # The cre simulator and the in-process LLM reviewer need more than 256mb.
   memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256

@@ -1,9 +1,0 @@
-# Use your `cre login` session instead of CRE_API_KEY (leave CRE_API_KEY empty).
-#   docker compose -f docker-compose.yml -f docker-compose.login.yml up --build
-# Writable: the CLI refreshes the token and saves it back to ~/.cre/cre.yaml.
-services:
-  runner:
-    environment:
-      MAX_CONCURRENCY: 1 # Avoid two runs refreshing the same session file at once.
-    volumes:
-      - ${HOME}/.cre:/home/app/.cre
