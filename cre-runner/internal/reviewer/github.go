@@ -38,6 +38,9 @@ type github struct {
 
 var errNotFound = errors.New("not found")
 
+// errForbidden: the token may not read it, e.g. an issue when the App lacks Issues: Read.
+var errForbidden = errors.New("not readable with the GitHub App's permissions")
+
 // errDiffTooLarge: GitHub refuses diffs over its size limits; the review continues without one.
 var errDiffTooLarge = errors.New("diff too large for GitHub to render")
 
@@ -70,6 +73,8 @@ func (g *github) getJSON(ctx context.Context, repo, path string, out any) error 
 		return err
 	case status == http.StatusNotFound:
 		return fmt.Errorf("GitHub %s: %w", path, errNotFound)
+	case status == http.StatusForbidden:
+		return fmt.Errorf("GitHub %s -> HTTP 403: %w", path, errForbidden)
 	case status < 200 || status > 299:
 		return fmt.Errorf("GitHub %s -> HTTP %d", path, status)
 	}
@@ -117,5 +122,12 @@ func newGitHub(api string, tokens ghapp.Tokens) *github {
 	if api == "" {
 		api = "https://api.github.com"
 	}
+	// Linked issues need Issues: Read. Ask for it, and fall back to the default read-only
+	// scopes for Apps or installations that don't grant it (the issue then stays unread).
+	withIssues := map[string]string{"issues": "read"}
+	for k, v := range ghapp.ReadOnly {
+		withIssues[k] = v
+	}
+	tokens = ghapp.Fallback(ghapp.WithPermissions(tokens, withIssues), tokens)
 	return &github{api: api, tokens: tokens, http: &http.Client{Timeout: 30 * time.Second}}
 }

@@ -273,3 +273,45 @@ func SourceFromEnv() (Tokens, error) {
 	}
 	return nil, errors.New("set GITHUB_APP_* vars (or GITHUB_TOKEN_VALUE for dev)")
 }
+
+// Fallback uses primary's tokens and falls back to fallback for repos where primary can't
+// mint one, e.g. primary asks for a permission the App or installation doesn't grant.
+// A repo's primary failure is remembered for a while so each call doesn't retry it first.
+func Fallback(primary, fallback Tokens) Tokens {
+	return &fallbackTokens{primary: primary, fallback: fallback, failed: map[string]time.Time{}}
+}
+
+const fallbackRetry = 10 * time.Minute
+
+type fallbackTokens struct {
+	primary, fallback Tokens
+
+	mu     sync.Mutex
+	failed map[string]time.Time // repo -> when primary last failed
+}
+
+func (f *fallbackTokens) ForRepo(repo string) TokenSource {
+	return fallbackSource{f: f, repo: repo}
+}
+
+type fallbackSource struct {
+	f    *fallbackTokens
+	repo string
+}
+
+func (s fallbackSource) Token(ctx context.Context) (string, error) {
+	f := s.f
+	f.mu.Lock()
+	failedAt, failed := f.failed[s.repo]
+	f.mu.Unlock()
+	if !failed || time.Since(failedAt) > fallbackRetry {
+		t, err := f.primary.ForRepo(s.repo).Token(ctx)
+		if err == nil {
+			return t, nil
+		}
+		f.mu.Lock()
+		f.failed[s.repo] = time.Now()
+		f.mu.Unlock()
+	}
+	return f.fallback.ForRepo(s.repo).Token(ctx)
+}
