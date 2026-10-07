@@ -64,6 +64,16 @@ are written as it progresses; see [API.md](API.md#cre-执行webhook-触发异步
 Without GitHub credentials (`GITHUB_APP_*` or `GITHUB_TOKEN_VALUE`) executions are disabled and webhooks
 are only recorded. Without `LLM_API_KEY`/`LLM_MODEL` the workflow uses stub reviewer scores.
 
+### Score breakdown and review requests
+
+- Each completed execution stores the workflow's `scorecard`: evidence checks, reviewer rubric points,
+  findings (file + line range in the PR, never code) and eligibility gates. It is part of `evaluation_hash`.
+- `POST /api/executions/:id/appeals` lets a contributor ask for a human review, once per execution. The runner
+  comments on the PR and @mentions the linked issue's author, else whoever merged it, else `APPEAL_REVIEWER`.
+  The App needs **Pull requests: Read and write** (plus **Issues: Read** to find the issue author).
+  The score does not change; a reviewer follows up on GitHub. The dashboard API has no auth yet, so anyone
+  with the dashboard can send the one request per execution.
+
 ## Run locally
 
 ```bash
@@ -72,7 +82,7 @@ cre login                # CRE auth: the CLI reads ~/.cre
 go run .                 # CRE_PROJECT_DIR defaults to ./cre, target local-simulation
 ```
 
-Apply `migrations/003_cre_executions.sql` in Supabase first.
+Apply the migrations in `migrations/` in order in Supabase first (004–006 are new: scorecards and appeals, contributor wallets, payout tx).
 
 ## CRE auth
 

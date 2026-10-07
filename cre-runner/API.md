@@ -23,8 +23,9 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 9 | PATCH | `/api/campaigns/{id}` | 修改 campaign（部分字段，可改状态、替换仓库） |
 | 10 | DELETE | `/api/campaigns/{id}` | 删除 campaign（有 CRE 执行记录时不可删） |
 | 11 | GET  | `/api/executions` | 全部 CRE 执行记录（分页，可按 campaign / 仓库 / PR / 状态过滤） |
-| 12 | GET  | `/api/executions/{id}` | 单个 CRE 执行详情（含发给 workflow 的请求） |
-| 13 | GET  | `/api/wallets/github/{login}` | 某 GitHub 用户的收款钱包（只读） |
+| 12 | GET  | `/api/executions/{id}` | 单个 CRE 执行详情（含发给 workflow 的请求、评分明细、复核请求） |
+| 13 | POST | `/api/executions/{id}/appeals` | 对评分发起人工复核：在 PR 下评论并 @ 复核人 |
+| 14 | GET  | `/api/wallets/github/{login}` | 某 GitHub 用户的收款钱包（只读） |
 
 错误码：
 
@@ -779,12 +780,70 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 |------|------|
 | `request` | runner 发给 workflow 的 HTTP trigger payload，例如 `{"repository": "...", "pr_number": 12, "campaign_id": "...", "event": "opened", "head_sha": "..."}` |
 | `runner_instance` | 执行它的机器（Fly machine id） |
+| `scorecard` | workflow 返回的评分明细，旧记录为 `null`（见下） |
+| `appeal` | 人工复核请求（接口 13），没有则为 `null` |
 
 执行不存在返回 404。
 
+`scorecard` 也计入 `evaluation_hash`，页面展示的就是实际评分用的数据。只有指向（文件 + 行号），不含代码：
+
+```json
+{
+  "weights": { "evidenceBps": 4000, "codeReviewerBps": 3000, "llmBps": 3000 },
+  "evidence": [
+    { "check": "linked_issue", "points": 25, "max": 25, "detail": "#12" },
+    { "check": "ci", "points": 25, "max": 25, "detail": "all checks passed" },
+    { "check": "approval", "points": 0, "max": 20, "detail": "no approving review" },
+    { "check": "tests", "points": 20, "max": 20, "detail": "pkg/pool/pool_test.go" },
+    { "check": "size", "points": 10, "max": 10, "detail": "+212 / -40 lines" }
+  ],
+  "reviews": [
+    { "role": "code_reviewer", "persona": "code", "provider": "code-reviewer", "score": 72,
+      "categories": [ { "name": "correctness", "points": 32, "max": 40 }, { "name": "tests", "points": 10, "max": 25 } ] },
+    { "role": "llm", "persona": "issue", "provider": "llm", "score": 80, "categories": [] }
+  ],
+  "findings": [
+    { "persona": "code", "severity": "medium", "category": "tests", "file": "pkg/pool/pool.go", "lines": "88-104",
+      "note": "Retry path on timeout has no test" }
+  ],
+  "gates": [
+    { "gate": "merged", "required": true, "passed": true, "detail": "" },
+    { "gate": "min_score", "required": true, "passed": false, "detail": "54 / 70" }
+  ]
+}
+```
+
+- `evidence`：GitHub 证据逐项得分（总分 100），`check` 为 `linked_issue` / `ci` / `approval` / `tests` / `size`。
+- `reviews`：两个 reviewer 的总分和各维度得分；stub reviewer 的 `categories` 为空。
+- `findings`：最多每个 reviewer 5 条，`file` 一定是 PR 改动过的文件，`lines` 为新文件行号，可能为空。
+- `gates`：campaign 资格条件，`required` 的全部 `passed` 才算 eligible。
+
 ---
 
-## 13. GitHub 用户的收款钱包
+## 13. 发起人工复核
+
+`POST /api/executions/{id}/appeals`
+
+```json
+{ "reason": "Tests are in pool_test.go; the reviewer missed them." }
+```
+
+在 PR 下发一条评论（评分、结果、理由、得分最低的 3 项、`DASHBOARD_URL` 下的明细链接），并 @ 复核人：
+关联 issue（PR 描述里的 `fixes #N`）的作者 → 合并 PR 的人 → `APPEAL_REVIEWER`，跳过 PR 作者本人和 bot。
+理由里的 `@` 会被转义，不会 @ 到别人。评分不会改变，复核由人来处理。
+
+| 状态码 | 含义 |
+|--------|------|
+| 201 | `{ "data": { "id", "execution_id", "reason", "mentioned_login", "comment_url", "status": "open", "created_at" } }` |
+| 400 | `reason` 不是 10–2000 个字符 |
+| 404 | 执行不存在 |
+| 409 | 执行还没完成，或已经发起过复核（每个执行只能一次） |
+| 502 | GitHub 读取 PR 或评论失败（请求会撤销，可重试）。GitHub App 需要 **Pull requests: Read and write** 权限 |
+| 503 | runner 没有配置 GitHub App |
+
+---
+
+## 14. GitHub 用户的收款钱包
 
 `GET /api/wallets/github/{login}`
 
@@ -814,7 +873,9 @@ curl "https://cre-runner.fly.dev/api/executions?status=running"
 - `001_github_webhook_events.sql`：webhook 事件表
 - `002_frontend_api.sql`：`number` 生成列、`github_webhook_repos` / `github_webhook_repo_facets` 视图、`campaigns` / `campaign_repos` 表
 - `003_cre_executions.sql`：CRE workflow 执行记录表 `cre_executions`（见下文）
-- `004_contributor_wallets.sql`：执行记录的作者和收款钱包，`contributor_wallets` 表
+- `004_scorecards_appeals.sql`：`cre_executions.scorecard` 列和复核请求表 `cre_execution_appeals`（**部署前先执行**）
+- `005_contributor_wallets.sql`：执行记录的作者和收款钱包，`contributor_wallets` 表
+- `006_payout_tx.sql`：`cre_executions.payout_tx`，链上发奖的 Solana 交易
 
 ---
 

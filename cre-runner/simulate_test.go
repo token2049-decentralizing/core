@@ -47,6 +47,12 @@ func TestParseSimulateOutput(t *testing.T) {
 
 	_, err = parseSimulateOutput("something odd\n")
 	require.ErrorAs(t, err, &ee)
+
+	// The scorecard is kept verbatim for the dashboard.
+	out := "Workflow Simulation Result:\n" + `"{\"score\":54,\"evaluation_hash\":\"0x1\",\"scorecard\":{\"gates\":[{\"gate\":\"min_score\"}]}}"` + "\n"
+	res, err = parseSimulateOutput(out)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"gates":[{"gate":"min_score"}]}`, string(res.Scorecard))
 }
 
 func TestChildEnvDropsRunnerSecrets(t *testing.T) {

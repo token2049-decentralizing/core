@@ -11,6 +11,7 @@ HTTP-triggered workflow: GitHub PR -> evidence + reviews -> score -> reward deci
 | `github.go` | GitHub evidence fetch (REST + GraphQL file paths) |
 | `reviewers.go` | Code reviewer / LLM calls (median across nodes) |
 | `scoring.go` | Score, eligibility, reward (integer math) |
+| `scorecard.go` | Contributor-facing score breakdown (hashed with the evaluation) |
 | `hash.go` | Canonical JSON + SHA-256 |
 | `solana.go` | Settlement (stub) |
 
@@ -69,10 +70,15 @@ Use goroutines in services outside the workflow (runner, reviewer, load tests).
 ## Response
 
 ```json
-{ "score": 90, "eligible": true, "reward": "450000000", "evaluation_hash": "0x...", "policy_hash": "0x..." }
+{ "score": 90, "eligible": true, "reward": "450000000", "evaluation_hash": "0x...", "policy_hash": "0x...",
+  "scorecard": { "weights": {}, "evidence": [], "reviews": [], "findings": [], "gates": [] } }
 ```
 
 `reward` is in token base units (USDC = 6 decimals).
+
+`scorecard` (also hashed into `evaluation_hash`) breaks the score down: evidence checks with points, each
+reviewer's rubric (`breakdown` from the reviewer, median score, identical detail across nodes), findings that
+point at a PR file and line range, and the campaign's eligibility gates. See `cre-runner/API.md`.
 
 ## Test
 

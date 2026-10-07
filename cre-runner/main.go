@@ -222,6 +222,7 @@ func main() {
 	r := gin.Default()
 	r.Use(corsMiddleware(corsOrigins))
 	registerAPI(r, client)
+	registerAppeals(r, newAppealsFromEnv(client))
 
 	executions, err := setupExecutions(r, client, port)
 	if err != nil {
@@ -309,4 +310,16 @@ func main() {
 		defer cancel()
 		executions.Shutdown(execCtx)
 	}
+}
+
+// newAppealsFromEnv enables review requests when GitHub App credentials are set.
+func newAppealsFromEnv(db *supabase.Client) *appeals {
+	a := &appeals{db: db, dashboardURL: os.Getenv("DASHBOARD_URL"), fallbackReviewer: os.Getenv("APPEAL_REVIEWER")}
+	tokens, err := ghapp.SourceFromEnv()
+	if err != nil {
+		log.Printf("review requests disabled: %v", err)
+		return a
+	}
+	a.gh = newGitHubAppeals(os.Getenv("GITHUB_API_URL"), tokens)
+	return a
 }

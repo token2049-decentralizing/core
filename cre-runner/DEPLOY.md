@@ -17,10 +17,11 @@
 | 文件 | 内容 |
 |------|------|
 | `003_cre_executions.sql` | CRE 执行记录表 `cre_executions` |
-| `004_contributor_wallets.sql` | PR 作者和收款钱包字段，`contributor_wallets` 表（GitHub 账号到 Privy Solana 钱包的映射） |
-| `005_payout_tx.sql` | `payout_tx`：链上发奖的 Solana 交易 |
+| `004_scorecards_appeals.sql` | `cre_executions.scorecard` 评分明细，复核请求表 `cre_execution_appeals` |
+| `005_contributor_wallets.sql` | PR 作者和收款钱包字段，`contributor_wallets` 表（GitHub 账号到 Privy Solana 钱包的映射） |
+| `006_payout_tx.sql` | `payout_tx`：链上发奖的 Solana 交易 |
 
-**先执行 004，再部署带 Privy 的版本**。新版本会往 `cre_executions` 写 `author_login`、`recipient_wallet` 等列，缺列时执行记录会写入失败。
+**先执行 004–006，再部署这个版本**。新版本会往 `cre_executions` 写 `author_login`、`recipient_wallet` 等列，缺列时执行记录会写入失败。
 
 ## 2. Fly app
 

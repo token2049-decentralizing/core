@@ -158,7 +158,15 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 	llm := ReviewerResult{Provider: providerName("llm", llmCall), Score: scores.LLM}
 
 	score := aggregateScore(evScore, codeReviewer, llm, cfg.Campaign.Weights)
+	gates := eligibilityGates(evidence, score, cfg.Campaign)
 	eligible := isEligible(evidence, score, cfg.Campaign)
+	card, err := buildScorecard(cfg.Campaign.Weights, evidence, gates, []reviewSlot{
+		{Role: "code_reviewer", Result: codeReviewer, Detail: scores.CodeReviewerDetail},
+		{Role: "llm", Result: llm, Detail: scores.LLMDetail},
+	})
+	if err != nil {
+		return "", err
+	}
 	reward := big.NewInt(0)
 	if eligible {
 		if reward, err = rewardBaseUnits(score, cfg.Campaign); err != nil {
@@ -182,6 +190,7 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 		"eligible":    eligible,
 		"reward":      reward.String(),
 		"policy_hash": pHash,
+		"scorecard":   card,
 	}
 	// Only when set, so evaluations without a recipient keep their hash.
 	if req.RecipientWallet != "" {
@@ -217,11 +226,12 @@ func onHTTPTrigger(cfg *Config, runtime cre.Runtime, payload *http.Payload) (str
 		Reward:         reward.String(),
 		EvaluationHash: eHash,
 		PolicyHash:     pHash,
+		Scorecard:      card,
 		PayoutTx:       payoutTx,
 	})
 	if err != nil {
 		return "", err
 	}
-	logger.Info("result " + string(out))
+	logger.Info(fmt.Sprintf("result score=%d eligible=%t reward=%s evaluation_hash=%s", score, eligible, reward, eHash))
 	return string(out), nil
 }

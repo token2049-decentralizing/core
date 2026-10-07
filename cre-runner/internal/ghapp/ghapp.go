@@ -1,4 +1,4 @@
-// Package ghapp mints short-lived, read-only GitHub App installation tokens.
+// Package ghapp mints short-lived GitHub App installation tokens, read-only unless asked otherwise.
 package ghapp
 
 import (
@@ -32,8 +32,9 @@ type Minter struct {
 	APIURL         string // Default https://api.github.com
 	AppID          string
 	Key            *rsa.PrivateKey
-	InstallationID string // Optional if Repo is set.
-	Repo           string // "owner/repo", used to look up the installation.
+	InstallationID string            // Optional if Repo is set.
+	Repo           string            // "owner/repo", used to look up the installation.
+	Permissions    map[string]string // Token scope; nil = ReadOnly.
 	HTTP           *http.Client
 	Now            func() time.Time
 
@@ -146,7 +147,11 @@ func (m *Minter) Token(ctx context.Context) (string, error) {
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	path := "/app/installations/" + m.InstallationID + "/access_tokens"
-	if err := m.call(ctx, http.MethodPost, path, jwt, map[string]any{"permissions": ReadOnly}, &res); err != nil {
+	perms := m.Permissions
+	if perms == nil {
+		perms = ReadOnly
+	}
+	if err := m.call(ctx, http.MethodPost, path, jwt, map[string]any{"permissions": perms}, &res); err != nil {
 		return "", err
 	}
 	if res.Token == "" {
@@ -235,10 +240,22 @@ func (p *Pool) ForRepo(repo string) TokenSource {
 	defer p.mu.Unlock()
 	m, ok := p.minters[repo]
 	if !ok {
-		m = &Minter{APIURL: p.base.APIURL, AppID: p.base.AppID, Key: p.base.Key, Repo: repo, HTTP: p.base.HTTP, Now: p.base.Now}
+		m = &Minter{APIURL: p.base.APIURL, AppID: p.base.AppID, Key: p.base.Key, Repo: repo, HTTP: p.base.HTTP,
+			Now: p.base.Now, Permissions: p.base.Permissions}
 		p.minters[repo] = m
 	}
 	return m
+}
+
+// WithPermissions returns tokens scoped to perms. A Static dev token has fixed scopes and is returned as is.
+func WithPermissions(t Tokens, perms map[string]string) Tokens {
+	p, ok := t.(*Pool)
+	if !ok {
+		return t
+	}
+	b := p.base
+	return NewPool(&Minter{APIURL: b.APIURL, AppID: b.AppID, Key: b.Key, InstallationID: b.InstallationID,
+		Repo: b.Repo, HTTP: b.HTTP, Now: b.Now, Permissions: perms})
 }
 
 // SourceFromEnv prefers the GitHub App; GITHUB_TOKEN_VALUE is the dev fallback.

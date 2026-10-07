@@ -157,6 +157,62 @@ export type ExecutionDetail = Execution & {
   // HTTP trigger payload the runner sent to the workflow.
   request: unknown
   runner_instance: string | null
+  // Score breakdown from the workflow (part of evaluation_hash); null for older runs.
+  scorecard: Scorecard | null
+  // Human review request, if the contributor sent one.
+  appeal: Appeal | null
+}
+
+export type EvidenceCheck = {
+  check: "linked_issue" | "ci" | "approval" | "tests" | "size" | (string & {})
+  points: number
+  max: number
+  detail: string
+}
+
+export type CategoryScore = { name: string; points: number; max: number }
+
+export type ReviewCard = {
+  // Config slot; sets the weight. persona is what it judged ("code", "issue").
+  role: "code_reviewer" | "llm" | (string & {})
+  persona: string
+  provider: string
+  score: number
+  categories: CategoryScore[] // Empty for a stub reviewer.
+}
+
+export type Finding = {
+  persona: string
+  severity: "high" | "medium" | "low"
+  category: string
+  file: string // Path changed in the PR, or "".
+  lines: string // "88" or "88-104", or "".
+  note: string
+}
+
+export type Gate = {
+  gate: "merged" | "ci_passed" | "linked_issue" | "min_score" | (string & {})
+  required: boolean
+  passed: boolean
+  detail: string
+}
+
+export type Scorecard = {
+  weights: { evidenceBps: number; codeReviewerBps: number; llmBps: number }
+  evidence: EvidenceCheck[]
+  reviews: ReviewCard[]
+  findings: Finding[]
+  gates: Gate[]
+}
+
+export type Appeal = {
+  id: string
+  execution_id: string
+  reason: string
+  mentioned_login: string | null
+  comment_url: string | null
+  status: "open" | "resolved"
+  created_at: string
 }
 
 export function isExecutionActive(execution: Execution) {
@@ -349,6 +405,20 @@ export async function getGitHubWallet(login: string) {
   return (
     await request<{ data: ContributorWallet }>(
       `/api/wallets/github/${encodeURIComponent(login)}`
+    )
+  ).data
+}
+
+// Comments on the PR and @mentions a reviewer. One request per execution (409 after that).
+export async function requestReview(executionId: string, reason: string) {
+  return (
+    await request<{ data: Appeal }>(
+      `/api/executions/${encodeURIComponent(executionId)}/appeals`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      }
     )
   ).data
 }
