@@ -46,9 +46,31 @@ export const PROGRAM_ID = address(
 export const SOLANA_RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com"
 
-// Privy chain id for signAndSendTransaction.
-export const SOLANA_CHAIN =
-  SOLANA_CLUSTER === "mainnet-beta" ? "solana:mainnet" : "solana:devnet"
+// Privy chain id for signAndSendTransaction: devnet only.
+export const SOLANA_CHAIN = "solana:devnet"
+
+// Genesis hash of Solana devnet (chain-selectors: solana-devnet).
+const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+let devnetCheck: Promise<void> | undefined
+
+// Refuses to build transactions if NEXT_PUBLIC_SOLANA_RPC_URL points at another cluster.
+export function assertDevnet(): Promise<void> {
+  devnetCheck ??= rpc
+    .getGenesisHash()
+    .send()
+    .then((hash) => {
+      if (hash !== DEVNET_GENESIS_HASH) {
+        throw new Error(
+          `NEXT_PUBLIC_SOLANA_RPC_URL is not Solana devnet (genesis ${hash}); campaigns only run on devnet.`
+        )
+      }
+    })
+    .catch((e: unknown) => {
+      devnetCheck = undefined // Retry next time, e.g. after a transient RPC error.
+      throw e
+    })
+  return devnetCheck
+}
 
 export const WRAPPED_SOL_MINT = address(
   "So11111111111111111111111111111111111111112"
@@ -58,10 +80,11 @@ const TOKEN_2022_PROGRAM_ADDRESS = address(
 )
 
 // Default reward mint per campaign asset. USDC: Circle's devnet USDC (faucet.circle.com).
-export const DEFAULT_MINT: Record<string, string> = {
-  USDC:
-    process.env.NEXT_PUBLIC_USDC_MINT ??
-    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+// The only reward tokens campaigns accept, per asset (Solana devnet): Circle's devnet USDC
+// (faucet.circle.com) and wrapped SOL (the native mint, same address on every cluster).
+// The runner refuses payouts from campaigns created with any other mint.
+export const REWARD_MINT: Record<string, Address> = {
+  USDC: address("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"),
   SOL: WRAPPED_SOL_MINT,
 }
 

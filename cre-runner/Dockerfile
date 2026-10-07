@@ -52,6 +52,7 @@ ENV PORT=8080 \
     CRE_PROJECT_DIR=/app/cre \
     CRE_WORKFLOW=test-workflow \
     CRE_WASM=/app/cre/build/workflow.wasm \
-    CRE_TARGET=docker-simulation \
-    CRE_ETH_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001
+    CRE_TARGET=docker-simulation
+# CRE_ETH_PRIVATE_KEY is not baked in: plain simulation uses the CLI's default key, and
+# `--broadcast` (Solana payouts) refuses that default, so it must be a real key (Fly secret).
 CMD ["run-app"]

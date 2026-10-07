@@ -19,14 +19,16 @@ import { RiErrorWarningLine, RiExternalLinkLine } from "@remixicon/react"
 
 import { ApiError, updateCampaign, type Campaign } from "@/lib/api"
 import {
+  assertDevnet,
   associatedTokenAddress,
   buildTransaction,
   campaignPda,
   createCampaignInstruction,
-  DEFAULT_MINT,
+  REWARD_MINT,
   fetchCampaign,
   fetchMint,
   fundCampaignInstructions,
+  PROGRAM_ID,
   setStatusInstruction,
   simulate,
   solBalance,
@@ -54,7 +56,10 @@ import { embeddedSolanaAddress } from "@/components/wallet-button"
 import { PRIVY_APP_ID } from "@/components/wallet-provider"
 
 // Signs and sends with the user's wallet; returns the transaction signature.
-type Signer = { address: Address; send(tx: Uint8Array): Promise<string> }
+type Signer = {
+  address: Address
+  send(tx: Uint8Array, action: string): Promise<string>
+}
 
 type Loaded =
   | { status: "loading" }
@@ -87,11 +92,25 @@ function WithWallet({ campaign }: { campaign: Campaign }) {
       wallet
         ? {
             address: address(wallet.address),
-            async send(transaction) {
+            async send(transaction, action) {
               const { signature } = await signAndSendTransaction({
                 transaction,
                 wallet,
                 chain: SOLANA_CHAIN,
+                options: {
+                  uiOptions: {
+                    description: `${action} on Solana devnet`,
+                    buttonText: "Sign on devnet",
+                    transactionInfo: {
+                      title: "Solana devnet",
+                      action,
+                      contractInfo: {
+                        name: "contrib_oracle",
+                        url: explorerAddressUrl(PROGRAM_ID),
+                      },
+                    },
+                  },
+                },
               })
               return getBase58Decoder().decode(signature)
             },
@@ -130,7 +149,8 @@ function Treasury({
 
   React.useEffect(() => {
     let cancelled = false
-    fetchCampaign(campaign.id)
+    assertDevnet()
+      .then(() => fetchCampaign(campaign.id))
       .then(async (onChain) => {
         if (!onChain) return { status: "missing" } as const
         const mint = await fetchMint(onChain.mint)
@@ -160,6 +180,7 @@ function Treasury({
     setPending(label)
     setError(null)
     try {
+      await assertDevnet()
       const tx = await buildTransaction(signer.address, await build(signer))
       const sim = await simulate(tx)
       if (sim.err) {
@@ -169,7 +190,7 @@ function Treasury({
         })
         return
       }
-      const signature = await signer.send(tx)
+      const signature = await signer.send(tx, label)
       toast.success(`${label} confirmed`, {
         action: {
           label: "View",
@@ -262,11 +283,14 @@ function Treasury({
           <CreateForm
             campaign={campaign}
             pending={pending !== null}
-            onSubmit={(mintStr, fundStr) =>
+            onSubmit={(fundStr) =>
               run(
                 "Campaign creation",
                 async (s) => {
-                  const mint = await fetchMint(address(mintStr))
+                  const expected = REWARD_MINT[campaign.reward_asset]
+                  if (!expected)
+                    throw new Error(`${campaign.reward_asset} campaigns can't be funded on Solana.`)
+                  const mint = await fetchMint(expected)
                   if (mint.decimals !== decimals)
                     throw new Error(
                       `This mint has ${mint.decimals} decimals; ${campaign.reward_asset} rewards are computed with ${decimals}.`
@@ -313,6 +337,7 @@ function Treasury({
   const amount = (units: bigint) =>
     `${formatUnits(units.toString(), mint.decimals)} ${campaign.reward_asset}`
   const isSponsor = signer?.address === onChain.sponsor
+  const wrongMint = onChain.mint !== REWARD_MINT[campaign.reward_asset]
   const capMismatch =
     onChain.maxRewardPerPr !==
     toBaseUnits(String(campaign.max_reward_per_pr), decimals)
@@ -354,6 +379,12 @@ function Treasury({
           {isSponsor && <span className="text-muted-foreground">(you)</span>}
         </dd>
       </dl>
+      {wrongMint && (
+        <p className="text-destructive">
+          This on-chain campaign holds a token that isn&apos;t devnet{" "}
+          {campaign.reward_asset}; cre-runner won&apos;t pay rewards from it.
+        </p>
+      )}
       {capMismatch && (
         <p className="text-ev-issue">
           The on-chain cap differs from this campaign&apos;s max reward per PR;
@@ -423,31 +454,24 @@ function CreateForm({
 }: {
   campaign: Campaign
   pending: boolean
-  onSubmit: (mint: string, fund: string) => void
+  onSubmit: (fund: string) => void
 }) {
-  const [mint, setMint] = React.useState(
-    DEFAULT_MINT[campaign.reward_asset] ?? ""
-  )
+  const mint = REWARD_MINT[campaign.reward_asset]
   const [fund, setFund] = React.useState(String(campaign.budget))
   return (
     <form
       className="flex flex-col gap-2"
       onSubmit={(e) => {
         e.preventDefault()
-        onSubmit(mint.trim(), fund.trim())
+        onSubmit(fund.trim())
       }}
     >
-      <Label htmlFor="treasury-mint">Reward token mint</Label>
-      <Input
-        id="treasury-mint"
-        value={mint}
-        onChange={(e) => setMint(e.target.value)}
-        className="font-mono"
-      />
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Reward token:{" "}
+        {mint ? <ExplorerLink addr={mint} /> : "unsupported asset"}{" "}
         {campaign.reward_asset === "SOL"
-          ? "Wrapped SOL: your SOL is wrapped when funding."
-          : `Default: Circle's ${SOLANA_CLUSTER} USDC (faucet.circle.com).`}
+          ? "(wrapped SOL; your SOL is wrapped when funding)"
+          : "(Circle devnet USDC; get some at faucet.circle.com)"}
       </p>
       <Label htmlFor="treasury-fund">
         Deposit now ({campaign.reward_asset})

@@ -70,6 +70,12 @@ func solanaPayoutsFromEnv() (*solana.Payouts, error) {
 	if err != nil {
 		return nil, fmt.Errorf("CRE_SOLANA_PRIVATE_KEY: %w", err)
 	}
+	// `cre workflow simulate --broadcast` refuses the CLI's default EVM key even when the
+	// workflow only writes to Solana; fail at startup instead of on every payout.
+	if !validEVMKey(os.Getenv("CRE_ETH_PRIVATE_KEY")) {
+		return nil, errors.New("CRE_ETH_PRIVATE_KEY must be a real 32-byte hex key for --broadcast " +
+			"(any fresh, unfunded key: openssl rand -hex 32)")
+	}
 	keys := map[string]string{
 		"SOLANA_PROGRAM_ID":        programID,
 		"SOLANA_FORWARDER_PROGRAM": env("SOLANA_FORWARDER_PROGRAM", solana.MockForwarderProgram),
@@ -93,6 +99,23 @@ func solanaPayoutsFromEnv() (*solana.Payouts, error) {
 		ForwarderProgram: parsed["SOLANA_FORWARDER_PROGRAM"],
 		ForwarderState:   parsed["SOLANA_FORWARDER_STATE"],
 	}, nil
+}
+
+// validEVMKey: 64 hex characters (optional 0x), not zero and not the CLI's default key 0x…01.
+func validEVMKey(k string) bool {
+	k = strings.TrimPrefix(strings.TrimSpace(k), "0x")
+	if len(k) != 64 {
+		return false
+	}
+	b, err := hex.DecodeString(k)
+	if err != nil {
+		return false
+	}
+	nonZero := false
+	for _, c := range b[:31] {
+		nonZero = nonZero || c != 0
+	}
+	return nonZero || b[31] > 1
 }
 
 // setupExecutions mounts the reviewer and returns the CRE executor, or nil when no

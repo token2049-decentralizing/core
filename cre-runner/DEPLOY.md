@@ -159,7 +159,10 @@ solana-keygen new -o ~/cre-payer.json && solana airdrop 2 $(solana-keygen pubkey
 cd cre-runner
 fly secrets set --stage \
   CRE_SOLANA_PRIVATE_KEY="$(go run ./cmd/solana-key ~/cre-payer.json)" \
+  CRE_ETH_PRIVATE_KEY="$(openssl rand -hex 32)" \
   SOLANA_PROGRAM_ID="<程序 ID>"
+# CRE_ETH_PRIVATE_KEY：cre CLI 用 --broadcast 时要求一把真实的 EVM 私钥（拒绝默认的 0x…01），
+#   即使 workflow 只写 Solana。随便生成一把即可，不需要任何资金；不设的话 runner 启动时会报错。
 fly secrets set --stage SOLANA_RPC_URL="https://devnet.helius-rpc.com/?api-key=<key>"
 # SOLANA_RPC_URL：runner 和 CRE 模拟器（project.yaml 的 ${CRE_SOLANA_RPC_URL}）都用它。
 #   默认 https://api.devnet.solana.com，突发请求会被限流（429），建议用专用 devnet RPC。

@@ -68,11 +68,14 @@ function PrivyWalletButton() {
             {shortAddress(address)}
           </span>
         )}
+        <span className="border border-ev-issue/40 bg-ev-issue/10 px-1 text-[10px] font-medium text-foreground">
+          Devnet
+        </span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuGroup>
           <DropdownMenuLabel>
-            {address ? "Solana wallet" : "Creating your wallet…"}
+            {address ? "Solana devnet wallet" : "Creating your wallet…"}
           </DropdownMenuLabel>
           {address && (
             <DropdownMenuItem
