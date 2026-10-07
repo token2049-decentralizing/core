@@ -35,7 +35,7 @@ CRE workflow ── WriteReportFromRewardReport ──► forwarder (keystone / 
 - the caller is the configured forwarder: `forwarder_state` matches config, and `forwarder_authority` is the
   forwarder's signer PDA `["forwarder", forwarder_state, contrib_oracle]`;
 - the workflow owner matches (if `workflow_owner` is set; zeros = any);
-- the campaign is active, `policy_hash` matches (if set), `0 < amount <= max_reward_per_pr`, the vault has the funds,
+- the campaign is active, `0 < amount <= max_reward_per_pr`, the vault has the funds,
   and the token account belongs to `recipient`;
 - the PR wasn't paid yet: the `Payout` PDA `["payout", campaign, contribution_id]` must not exist.
 
@@ -49,9 +49,11 @@ Payout records are paid for by the `rent_payer` PDA (forwarded accounts can't si
 | `contribution_id` | `[u8; 32]` | `sha256("owner/repo#pr")` |
 | `recipient` | `Pubkey` | contributor wallet |
 | `amount` | `u64` | token base units (the workflow's `reward`) |
-| `score` | `u8` | 0-100 |
-| `evaluation_hash` | `[u8; 32]` | workflow `evaluation_hash` |
-| `policy_hash` | `[u8; 32]` | workflow `policy_hash` |
+| `evaluation_hash` | `[u8; 32]` | workflow `evaluation_hash` (commits to score, policy, evidence) |
+
+120 bytes: a CRE Solana report is capped at 265 bytes (109 metadata + 32 account hash + 4 + payload) and the
+forwarder transaction at 1232, so score and policy hash stay off-chain. `Campaign.policy_hash` is still stored but
+no longer enforced.
 
 ### Accounts for the workflow write (order matters)
 

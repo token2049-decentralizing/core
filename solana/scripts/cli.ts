@@ -163,7 +163,6 @@ async function main() {
           recipient: p.recipient.toBase58(),
           contributionId: hex(p.contributionId),
           evaluationHash: hex(p.evaluationHash),
-          policyHash: hex(p.policyHash),
           reportId: hex(p.reportId),
         },
       );

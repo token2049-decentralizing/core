@@ -3,6 +3,8 @@ use anchor_lang::prelude::*;
 use crate::errors::OracleError;
 
 /// Payload the CRE workflow writes (Borsh). `on_report` receives it as `payload`.
+/// 120 bytes: a CRE Solana report is capped at 265 (109 metadata + 32 account hash + 4 + payload)
+/// and the forwarder transaction at 1232. Score and policy hash are covered by `evaluation_hash`.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub struct RewardReport {
     /// cre-runner campaign UUID, raw 16 bytes.
@@ -13,9 +15,8 @@ pub struct RewardReport {
     pub recipient: Pubkey,
     /// Token base units.
     pub amount: u64,
-    pub score: u8,
+    /// The workflow's evaluation_hash: commits to the evidence, score, reward and policy.
     pub evaluation_hash: [u8; 32],
-    pub policy_hash: [u8; 32],
 }
 
 impl RewardReport {

@@ -107,9 +107,7 @@ async function forwardReport(pr: number, recipient: PublicKey, amount: bigint) {
     contributionId: [...contributionId(REPO, pr)],
     recipient,
     amount: new BN(amount.toString()),
-    score: 91,
     evaluationHash: new Array(32).fill(9),
-    policyHash: new Array(32).fill(7),
   });
   const raw = Buffer.concat([
     Buffer.from([1]), sha256(Buffer.from(`exec-${pr}`)), Buffer.alloc(12), // forwarder metadata (45)

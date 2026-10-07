@@ -36,9 +36,7 @@ export interface PayoutRecord {
   contributionId: Buffer;
   recipient: PublicKey;
   amount: bigint;
-  score: number;
   evaluationHash: Buffer;
-  policyHash: Buffer;
   reportId: Buffer;
   paidAt: bigint;
 }
@@ -52,9 +50,7 @@ export function decodePayout(data: Buffer): PayoutRecord {
     contributionId: Buffer.from(take(32)),
     recipient: new PublicKey(take(32)),
     amount: take(8).readBigUInt64LE(),
-    score: take(1)[0],
     evaluationHash: Buffer.from(take(32)),
-    policyHash: Buffer.from(take(32)),
     reportId: Buffer.from(take(2)),
     paidAt: take(8).readBigInt64LE(),
   };
