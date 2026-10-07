@@ -27,6 +27,11 @@ type RewardDecision struct {
 	PolicyHash     string   // 0x-hex
 }
 
+// payoutComputeLimit bounds the forwarder transaction: forwarder checks plus on_report's
+// PDA derivations, payout account creation and one token transfer. Must stay within the
+// CRE Solana gas limit (300k by default, cre/simulation-limits.json ChainWrite.Solana.GasLimit).
+const payoutComputeLimit = 200_000
+
 // submitRewardDecision pays an eligible merged PR: it writes a RewardReport through the CRE
 // forwarder to contrib_oracle's on_report, which checks the campaign and pays once per PR.
 // Returns the transaction signature. Without Solana config the decision is only logged.
@@ -48,7 +53,9 @@ func submitRewardDecision(runtime cre.Runtime, cfg *SolanaConfig, d RewardDecisi
 	if err != nil {
 		return "", err
 	}
-	reply, err := oracle.WriteReportFromRewardReport(runtime, report, accounts, nil).Await()
+	// The capability rejects a nil compute config (despite the bindings' comment).
+	compute := &solana.ComputeConfig{ComputeLimit: payoutComputeLimit}
+	reply, err := oracle.WriteReportFromRewardReport(runtime, report, accounts, compute).Await()
 	if err != nil {
 		return "", fmt.Errorf("solana payout: %w", err)
 	}
