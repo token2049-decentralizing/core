@@ -174,8 +174,16 @@ func setupExecutions(r *gin.Engine, db *supabase.Client, port string) (*executor
 	if creAuth == "none" {
 		log.Printf("no CRE credentials (CRE_API_KEY, CRE_LOGIN_YAML or ~/.cre/cre.yaml); executions will fail to authenticate")
 	}
-	if limits := env("CRE_LIMITS", "simulation-limits.json"); fileExists(filepath.Join(sim.Dir, limits)) || filepath.IsAbs(limits) {
-		sim.Limits = limits
+	// Absolute: the cre CLI doesn't resolve a relative --limits path against its working dir.
+	if limits := env("CRE_LIMITS", "simulation-limits.json"); limits != "" {
+		if !filepath.IsAbs(limits) {
+			limits = filepath.Join(sim.Dir, limits)
+		}
+		if abs, err := filepath.Abs(limits); err == nil && fileExists(abs) {
+			sim.Limits = abs
+		} else {
+			log.Printf("simulation limits file %s not found; using the CLI's default limits", limits)
+		}
 	}
 	concurrency := envInt("MAX_CONCURRENCY", 2)
 	if sim.Wasm == "" && concurrency > 1 {
