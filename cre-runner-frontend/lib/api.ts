@@ -114,6 +114,42 @@ export type CreateCampaignInput = {
   repos?: string[]
 }
 
+export const EXECUTION_STATUSES = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "skipped",
+] as const
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number]
+
+// One CRE workflow run for a (campaign, repo, PR), started by a pull_request webhook.
+export type Execution = {
+  id: string
+  delivery_id: string
+  campaign_id: string
+  repository_full_name: string
+  pr_number: number
+  event: "opened" | "merged"
+  head_sha: string | null
+  status: ExecutionStatus
+  score: number | null
+  eligible: boolean | null
+  // Token base units as a decimal string (USDC: 6 decimals, SOL: 9).
+  reward: string | null
+  evaluation_hash: string | null
+  policy_hash: string | null
+  settled: boolean
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export function isExecutionActive(execution: Execution) {
+  return execution.status === "queued" || execution.status === "running"
+}
+
 type Query = Record<string, string | number | undefined | null>
 
 function buildUrl(path: string, query?: Query) {
@@ -219,6 +255,18 @@ export async function createCampaign(input: CreateCampaignInput) {
       body: JSON.stringify(input),
     })
   ).data
+}
+
+export function listPRExecutions(
+  campaignId: string,
+  repo: string,
+  number: number,
+  query: { page?: number; page_size?: number } = {}
+) {
+  return request<Paginated<Execution>>(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/repos/${repoPath(repo)}/prs/${number}/executions`,
+    { query }
+  )
 }
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError }

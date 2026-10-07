@@ -12,6 +12,7 @@ import {
 } from "@/lib/format"
 import { ApiErrorState } from "@/components/api-error-state"
 import { CampaignStatusBadge } from "@/components/campaign-status-badge"
+import { ExecutionLookup } from "@/components/execution-lookup"
 import { PageBody, PageHeader, Section } from "@/components/page"
 
 export async function generateMetadata(
@@ -124,6 +125,18 @@ export default async function CampaignPage(
               </ul>
             )}
           </Section>
+          {campaign.repos.length > 0 && (
+            <Section title="CRE executions">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Look up the workflow runs, scores and settlement of a pull
+                request.
+              </p>
+              <ExecutionLookup
+                campaignId={campaign.id}
+                repos={campaign.repos}
+              />
+            </Section>
+          )}
           <Section title="Treasury">
             {campaign.treasury_address ? (
               <p className="text-xs break-all">{campaign.treasury_address}</p>

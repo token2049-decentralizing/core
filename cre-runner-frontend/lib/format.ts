@@ -49,6 +49,28 @@ export function formatAmount(value: number, asset?: string) {
   return asset ? `${amount} ${asset}` : amount
 }
 
+export const TOKEN_DECIMALS: Record<string, number> = { USDC: 6, SOL: 9 }
+
+// Converts token base units ("445000000") to whole tokens ("445") with string math,
+// since rewards can exceed Number's safe integer range.
+export function formatUnits(baseUnits: string, decimals: number) {
+  if (!/^\d+$/.test(baseUnits)) return baseUnits
+  const padded = baseUnits.padStart(decimals + 1, "0")
+  const whole = padded.slice(0, padded.length - decimals)
+  const frac = padded.slice(padded.length - decimals).replace(/0+$/, "")
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return frac ? `${grouped}.${frac}` : grouped
+}
+
+export function formatDuration(fromIso: string, toIso: string) {
+  const seconds = Math.max(
+    0,
+    Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000)
+  )
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
 export function formatCount(value: number) {
   return new Intl.NumberFormat("en").format(value)
 }

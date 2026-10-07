@@ -19,6 +19,7 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 5 | GET  | `/api/campaigns` | campaign 列表（分页，按创建时间倒序） |
 | 6 | GET  | `/api/campaigns/{id}` | 单个 campaign 详情 |
 | 7 | POST | `/api/campaigns` | 创建 reward campaign，可附带仓库 |
+| 8 | GET  | `/api/campaigns/{id}/repos/{owner}/{repo}/prs/{number}/executions` | 某 campaign 下某仓库某 PR 的 CRE 执行记录 |
 
 错误码：
 
@@ -604,9 +605,126 @@ curl -X POST https://cre-runner.fly.dev/api/campaigns \
 
 ---
 
+## 8. PR 的 CRE 执行记录
+
+`GET /api/campaigns/{id}/repos/{owner}/{repo}/prs/{number}/executions`
+
+某个 campaign 下、某个仓库、某个 PR 的全部 CRE workflow 执行，按创建时间倒序（最新在前），分页。
+执行由 `pull_request` webhook 异步触发，状态会随时间变化，执行中（`queued` / `running`）的记录可轮询刷新。
+
+| 参数 | 位置 | 说明 |
+|------|------|------|
+| `id` | path | campaign UUID |
+| `owner` / `repo` | path | 仓库 |
+| `number` | path | PR 编号，正整数 |
+| `page` | query | 页码，从 0 开始，默认 0 |
+| `page_size` | query | 每页条数，1–100，默认 20 |
+
+**请求示例**
+
+```bash
+curl "https://cre-runner.fly.dev/api/campaigns/1f0c6a52-0d0e-4b39-9a7e-2d6c1f4b8e11/repos/octo-org/hello-world/prs/42/executions"
+```
+
+**响应示例**
+
+```json
+{
+  "data": [
+    {
+      "id": "6b1e2c1a-5a3f-4f7e-9a51-0f2a9e7c3d10",
+      "delivery_id": "3c9a5f10-a2d1-11f0-8f6e-2b1d6f0e9a44",
+      "campaign_id": "1f0c6a52-0d0e-4b39-9a7e-2d6c1f4b8e11",
+      "repository_full_name": "octo-org/hello-world",
+      "pr_number": 42,
+      "event": "merged",
+      "head_sha": "9f2b6c1d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c",
+      "status": "completed",
+      "score": 89,
+      "eligible": true,
+      "reward": "445000000",
+      "evaluation_hash": "0x4ea2c445…",
+      "policy_hash": "0xbb5dc2d2…",
+      "settled": true,
+      "error": null,
+      "created_at": "2026-10-07T09:12:03.120+00:00",
+      "started_at": "2026-10-07T09:12:03.410+00:00",
+      "finished_at": "2026-10-07T09:13:41.002+00:00"
+    },
+    {
+      "id": "a7d0c3e2-1b4f-4c8a-8e2d-3f5a6b7c8d90",
+      "delivery_id": "0e1f2a30-a2c9-11f0-9b1c-7a2e4d6f8b12",
+      "campaign_id": "1f0c6a52-0d0e-4b39-9a7e-2d6c1f4b8e11",
+      "repository_full_name": "octo-org/hello-world",
+      "pr_number": 42,
+      "event": "opened",
+      "head_sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "status": "failed",
+      "score": null,
+      "eligible": null,
+      "reward": null,
+      "evaluation_hash": null,
+      "policy_hash": null,
+      "settled": false,
+      "error": "PR head moved: requested 1a2b3c4…, current 9f2b6c1…",
+      "created_at": "2026-10-07T08:55:40.000+00:00",
+      "started_at": "2026-10-07T08:55:40.300+00:00",
+      "finished_at": "2026-10-07T08:55:42.100+00:00"
+    }
+  ],
+  "pagination": { "page": 0, "page_size": 20, "total": 2, "has_more": false }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `id` | CRE execution id |
+| `delivery_id` | 触发它的 webhook，可用接口 4 查看 |
+| `event` | `opened`（预览，不发奖励）/ `merged`（结算） |
+| `status` | `queued` / `running` / `completed` / `failed` / `skipped`，见下文 |
+| `score` / `eligible` / `reward` / `evaluation_hash` / `policy_hash` | 仅 `completed` 时有值 |
+| `reward` | token 最小单位的字符串（USDC 6 位小数：`"445000000"` = 445 USDC；SOL 9 位），不要用浮点数解析 |
+| `settled` | 是否为该 PR 的结算记录（每个 campaign + 仓库 + PR 最多一条） |
+| `error` | `failed` 的失败原因，或 `skipped` 的原因 |
+| `started_at` / `finished_at` | 开始运行 / 结束时间，未到该阶段为 `null` |
+
+PR 没有执行记录时返回空数组。campaign 不存在返回 404；`repo`、`number`、分页参数不合法返回 400。
+
+---
+
 ## 数据库
 
 表结构见 `migrations/`：
 
 - `001_github_webhook_events.sql`：webhook 事件表
 - `002_frontend_api.sql`：`number` 生成列、`github_webhook_repos` / `github_webhook_repo_facets` 视图、`campaigns` / `campaign_repos` 表
+- `003_cre_executions.sql`：CRE workflow 执行记录表 `cre_executions`（见下文）
+
+---
+
+## CRE 执行（webhook 触发，异步）
+
+旧的 `POST /evaluate` 已移除。`POST /webhook` 收到 `pull_request` 事件后先同步写入 `github_webhook_events` 并立即返回 `ack`，
+然后在 goroutine 里对该仓库所属的每个**进行中** campaign（`status = 'active'` 且在 `starts_at` / `ends_at` 时间窗内）各跑一次 CRE workflow：
+
+| PR action | workflow `event` |
+|-----------|------------------|
+| `opened` / `reopened` / `synchronize` / `ready_for_review`（draft 跳过） | `opened`：预览，不发奖励 |
+| `closed` 且 `merged = true` | `merged`：结算 |
+
+每次执行写一行 `cre_executions`，`id` 即 CRE execution id（runner 生成的 UUID），状态依次更新：
+
+| status | 含义 |
+|--------|------|
+| `queued` | 已入库，等待执行槽位（`MAX_CONCURRENCY` 个并发，最多 `MAX_QUEUE` 个排队） |
+| `running` | 正在预热 LLM reviewer 并运行 `cre workflow simulate`（`started_at`） |
+| `completed` | 成功：`score` / `eligible` / `reward` / `evaluation_hash` / `policy_hash` 已写入 |
+| `failed` | 失败，原因见 `error`（PR 不存在、head 已变、LLM 错误、超时、队列已满、runner 重启……） |
+| `skipped` | `merged` 已被之前的执行结算过（`error` 中有那次执行的 id） |
+
+- **只结算一次**：`merged` 且 `eligible` 且 `reward != "0"` 的结果会设 `settled = true`；
+  唯一索引保证每个 (campaign, repo, PR) 最多一条 `settled` 记录，重复投递只会得到 `skipped`。
+- workflow 配置按 campaign 生成：`reward_asset`（USDC 6 位 / SOL 9 位小数）、`max_reward_per_pr`（score_based 封顶）、
+  `min_score`、`eligibility.merged / ci_passed / linked_issue`。`scoring` 暂未映射，权重固定为 evidence 40% / code reviewer 30% / LLM 30%。
+- 停机（SIGINT/SIGTERM）时等待进行中的执行最多 `SHUTDOWN_GRACE_SECONDS` 秒，其余记为 `failed`；
+  被强杀遗留的 `queued` / `running` 行会在同一台机器（`runner_instance`）下次启动时标记为 `failed`。

@@ -56,6 +56,7 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/campaigns", a.listCampaigns)
 	g.GET("/campaigns/:id", a.getCampaign)
 	g.POST("/campaigns", a.createCampaign)
+	g.GET("/campaigns/:id/repos/:owner/:repo/prs/:number/executions", a.listPRExecutions)
 }
 
 func apiError(c *gin.Context, status int, msg string) {
@@ -747,4 +748,106 @@ func (a *api) getCampaign(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
+}
+
+// GET /api/campaigns/:id/repos/:owner/:repo/prs/:number/executions
+
+// executionColumns leaves out runner internals (request payload, runner_instance).
+const executionColumns = "id,delivery_id,campaign_id,repository_full_name,pr_number,event,head_sha,status," +
+	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at"
+
+type executionItem struct {
+	ID                 string  `json:"id"`
+	DeliveryID         string  `json:"delivery_id"`
+	CampaignID         string  `json:"campaign_id"`
+	RepositoryFullName string  `json:"repository_full_name"`
+	PRNumber           int     `json:"pr_number"`
+	Event              string  `json:"event"`
+	HeadSHA            *string `json:"head_sha"`
+	Status             string  `json:"status"`
+	Score              *int    `json:"score"`
+	Eligible           *bool   `json:"eligible"`
+	Reward             *string `json:"reward"` // token base units
+	EvaluationHash     *string `json:"evaluation_hash"`
+	PolicyHash         *string `json:"policy_hash"`
+	Settled            bool    `json:"settled"`
+	Error              *string `json:"error"`
+	CreatedAt          string  `json:"created_at"`
+	StartedAt          *string `json:"started_at"`
+	FinishedAt         *string `json:"finished_at"`
+}
+
+func (a *api) listPRExecutions(c *gin.Context) {
+	id := c.Param("id")
+	repo := c.Param("owner") + "/" + c.Param("repo")
+	number, err := strconv.Atoi(c.Param("number"))
+	switch {
+	case !uuidRe.MatchString(id):
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	case !repoFullNameRe.MatchString(repo):
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	case err != nil || number <= 0 || number > 1<<31-1:
+		apiError(c, http.StatusBadRequest, "number must be a positive integer")
+		return
+	}
+	page, err := queryInt(c, "page", 0, 0, 1_000_000)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	pageSize, err := queryInt(c, "page_size", defaultPageSize, 1, maxPageSize)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 404 for an unknown campaign; an empty list means the PR simply has no executions yet.
+	var campaigns []struct {
+		ID string `json:"id"`
+	}
+	if _, err := a.db.From("campaigns").Select("id", "", false).Eq("id", id).Limit(1, "").ExecuteTo(&campaigns); err != nil {
+		internalError(c, "load executions", err)
+		return
+	}
+	if len(campaigns) == 0 {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+
+	filter := func(columns string, head bool) *postgrest.FilterBuilder {
+		return a.db.From(executionsTable).
+			Select(columns, "exact", head).
+			Eq("campaign_id", id).
+			Eq("repository_full_name", repo).
+			Eq("pr_number", strconv.Itoa(number))
+	}
+	var rows []executionItem
+	from := page * pageSize
+	total, err := filter(executionColumns, false).
+		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
+		Order("id", &postgrest.OrderOpts{Ascending: false}).
+		Range(from, from+pageSize-1, "").
+		ExecuteTo(&rows)
+	if isRangeError(err) {
+		rows = nil
+		_, total, err = filter("id", true).Execute()
+	}
+	if err != nil {
+		internalError(c, "load executions", err)
+		return
+	}
+	if rows == nil {
+		rows = []executionItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": rows,
+		"pagination": gin.H{
+			"page":      page,
+			"page_size": pageSize,
+			"total":     total,
+			"has_more":  int64(from+len(rows)) < total,
+		},
+	})
 }
