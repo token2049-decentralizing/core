@@ -128,6 +128,7 @@ export type Execution = {
   id: string
   delivery_id: string
   campaign_id: string
+  campaign: { id: string; name: string; reward_asset: string } | null
   repository_full_name: string
   pr_number: number
   event: "opened" | "merged"
@@ -144,6 +145,12 @@ export type Execution = {
   created_at: string
   started_at: string | null
   finished_at: string | null
+}
+
+export type ExecutionDetail = Execution & {
+  // HTTP trigger payload the runner sent to the workflow.
+  request: unknown
+  runner_instance: string | null
 }
 
 export function isExecutionActive(execution: Execution) {
@@ -293,6 +300,28 @@ export async function deleteCampaign(id: string) {
   await request<null>(`/api/campaigns/${encodeURIComponent(id)}`, {
     method: "DELETE",
   })
+}
+
+export type ExecutionQuery = {
+  page?: number
+  page_size?: number
+  campaign_id?: string
+  repo?: string
+  pr?: number
+  status?: ExecutionStatus
+  event?: "opened" | "merged"
+}
+
+export function listExecutions(query: ExecutionQuery = {}) {
+  return request<Paginated<Execution>>("/api/executions", { query })
+}
+
+export async function getExecution(id: string) {
+  return (
+    await request<{ data: ExecutionDetail }>(
+      `/api/executions/${encodeURIComponent(id)}`
+    )
+  ).data
 }
 
 export function listPRExecutions(

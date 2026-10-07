@@ -62,6 +62,15 @@ export function formatUnits(baseUnits: string, decimals: number) {
   return frac ? `${grouped}.${frac}` : grouped
 }
 
+// Reward in base units as "445 USDC"; unknown assets show raw base units.
+export function formatReward(baseUnits: string | null, asset?: string) {
+  if (baseUnits === null) return "—"
+  const decimals = asset ? TOKEN_DECIMALS[asset] : undefined
+  return decimals === undefined
+    ? baseUnits
+    : `${formatUnits(baseUnits, decimals)} ${asset}`
+}
+
 export function formatDuration(fromIso: string, toIso: string) {
   const seconds = Math.max(
     0,

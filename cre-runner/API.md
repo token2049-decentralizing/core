@@ -22,6 +22,8 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 8 | GET  | `/api/campaigns/{id}/repos/{owner}/{repo}/prs/{number}/executions` | 某 campaign 下某仓库某 PR 的 CRE 执行记录 |
 | 9 | PATCH | `/api/campaigns/{id}` | 修改 campaign（部分字段，可改状态、替换仓库） |
 | 10 | DELETE | `/api/campaigns/{id}` | 删除 campaign（有 CRE 执行记录时不可删） |
+| 11 | GET  | `/api/executions` | 全部 CRE 执行记录（分页，可按 campaign / 仓库 / PR / 状态过滤） |
+| 12 | GET  | `/api/executions/{id}` | 单个 CRE 执行详情（含发给 workflow 的请求） |
 
 错误码：
 
@@ -734,6 +736,45 @@ campaign 不存在返回 404，参数不合法返回 400。campaign 行和仓库
 ```
 
 campaign 不存在返回 404。
+
+---
+
+## 11. CRE 执行记录列表
+
+`GET /api/executions`
+
+按创建时间倒序返回所有 campaign 的执行记录，分页。
+
+| 参数 | 说明 |
+|------|------|
+| `campaign_id` | campaign UUID |
+| `repo` | `owner/repo` |
+| `pr` | PR 编号（通常和 `repo` 一起用） |
+| `status` | `queued` / `running` / `completed` / `failed` / `skipped` |
+| `event` | `opened` / `merged` |
+| `page` / `page_size` | 同其他列表接口，默认 0 / 20，`page_size` 最大 100 |
+
+```bash
+# 正在跑的执行
+curl "https://cre-runner.fly.dev/api/executions?status=running"
+```
+
+响应格式同接口 8。每条记录（接口 8 也一样）都带 `campaign` 字段：`{ "id", "name", "reward_asset" }`，可以直接显示 campaign 名称、换算 `reward`。参数不合法返回 400。
+
+---
+
+## 12. 单个 CRE 执行详情
+
+`GET /api/executions/{id}`
+
+字段同接口 11 的单条记录，另外多两个：
+
+| 字段 | 说明 |
+|------|------|
+| `request` | runner 发给 workflow 的 HTTP trigger payload，例如 `{"repository": "...", "pr_number": 12, "campaign_id": "...", "event": "opened", "head_sha": "..."}` |
+| `runner_instance` | 执行它的机器（Fly machine id） |
+
+执行不存在返回 404。
 
 ---
 

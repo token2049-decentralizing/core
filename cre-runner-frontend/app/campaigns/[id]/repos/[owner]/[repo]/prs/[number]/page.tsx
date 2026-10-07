@@ -1,11 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound } from "next/navigation"
-import {
-  RiExternalLinkLine,
-  RiGitCommitLine,
-  RiInboxLine,
-} from "@remixicon/react"
+import { RiExternalLinkLine } from "@remixicon/react"
 
 import {
   attempt,
@@ -15,34 +11,14 @@ import {
   type Campaign,
   type Execution,
 } from "@/lib/api"
-import {
-  formatDateTime,
-  formatDuration,
-  formatUnits,
-  timeAgo,
-  TOKEN_DECIMALS,
-} from "@/lib/format"
+import { formatReward } from "@/lib/format"
 import { ApiErrorState } from "@/components/api-error-state"
 import { AutoRefresh } from "@/components/auto-refresh"
 import { ExecutionStatusBadge } from "@/components/execution-status-badge"
+import { ExecutionTable } from "@/components/execution-table"
 import { PageBody, PageHeader, Section } from "@/components/page"
 import { Pager } from "@/components/pager"
 import { Button } from "@/components/ui/button"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 
 const PAGE_SIZE = 20
 
@@ -99,6 +75,8 @@ export default async function PRExecutionsPage(
 
   const rows = executions.data.data
   const active = rows.some(isExecutionActive)
+  // Rendered per request on the server: running durations count up to now.
+  const now = new Date().toISOString()
 
   return (
     <PageBody>
@@ -151,36 +129,19 @@ export default async function PRExecutionsPage(
       />
 
       <Section title="Executions">
-        {rows.length === 0 ? (
-          <Empty className="border py-14">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <RiInboxLine />
-              </EmptyMedia>
-              <EmptyTitle>No executions yet</EmptyTitle>
-              <EmptyDescription>
-                An execution starts when this pull request is opened, pushed to
-                or merged while the campaign is active.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <>
-            <ExecutionTable campaign={campaign.data} executions={rows} />
-            <Pager pagination={executions.data.pagination} noun="executions" />
-          </>
+        <ExecutionTable
+          executions={rows}
+          now={now}
+          showPR={false}
+          showCampaign={false}
+          emptyHint="An execution starts when this pull request is opened, pushed to or merged while the campaign is active."
+        />
+        {rows.length > 0 && (
+          <Pager pagination={executions.data.pagination} noun="executions" />
         )}
       </Section>
     </PageBody>
   )
-}
-
-function reward(campaign: Campaign, baseUnits: string | null) {
-  if (baseUnits === null) return "—"
-  const decimals = TOKEN_DECIMALS[campaign.reward_asset]
-  return decimals === undefined
-    ? baseUnits
-    : `${formatUnits(baseUnits, decimals)} ${campaign.reward_asset}`
 }
 
 function Summary({
@@ -218,7 +179,7 @@ function Summary({
         label="Settled reward"
         unit={settled ? `by ${settled.id.slice(0, 8)}` : "not settled"}
       >
-        {settled ? reward(campaign, settled.reward) : "—"}
+        {settled ? formatReward(settled.reward, campaign.reward_asset) : "—"}
       </Fact>
       <Fact label="Executions">{total}</Fact>
     </dl>
@@ -245,122 +206,6 @@ function Fact({
           <span className="text-[11px] text-muted-foreground">{unit}</span>
         )}
       </dd>
-    </div>
-  )
-}
-
-function ExecutionTable({
-  campaign,
-  executions,
-}: {
-  campaign: Campaign
-  executions: Execution[]
-}) {
-  // Rendered per request on the server: running durations count up to now.
-  const now = new Date().toISOString()
-  return (
-    <div className="border">
-      <Table className="text-xs">
-        <TableHeader>
-          <TableRow>
-            <TableHead>Execution</TableHead>
-            <TableHead>Event</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="text-end">Score</TableHead>
-            <TableHead>Reward</TableHead>
-            <TableHead>Commit</TableHead>
-            <TableHead className="text-end">Duration</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {executions.map((e) => (
-            <TableRow key={e.id} className="align-top">
-              <TableCell>
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-medium" title={e.id}>
-                    {e.id.slice(0, 8)}
-                  </span>
-                  <span
-                    className="text-muted-foreground"
-                    title={formatDateTime(e.created_at)}
-                  >
-                    {timeAgo(e.created_at)} ·{" "}
-                    <Link
-                      href={`/deliveries/${e.delivery_id}`}
-                      className="underline-offset-4 hover:underline"
-                    >
-                      webhook
-                    </Link>
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>
-                {e.event === "merged" ? "Merged" : "Preview"}
-              </TableCell>
-              <TableCell className="max-w-72 whitespace-normal">
-                <div className="flex flex-col items-start gap-1">
-                  <ExecutionStatusBadge status={e.status} />
-                  {e.error && (
-                    <span
-                      className={
-                        e.status === "failed"
-                          ? "break-words text-destructive"
-                          : "break-words text-muted-foreground"
-                      }
-                    >
-                      {e.error}
-                    </span>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell className="text-end tabular-nums">
-                {e.score ?? "—"}
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-col gap-0.5">
-                  <span className="tabular-nums">
-                    {reward(campaign, e.reward)}
-                  </span>
-                  {e.eligible !== null && (
-                    <span className="text-muted-foreground">
-                      {e.settled
-                        ? "Settled"
-                        : e.eligible
-                          ? "Eligible"
-                          : "Not eligible"}
-                    </span>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                {e.head_sha ? (
-                  <a
-                    href={`https://github.com/${e.repository_full_name}/commit/${e.head_sha}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
-                    title={
-                      e.evaluation_hash
-                        ? `evaluation ${e.evaluation_hash}`
-                        : undefined
-                    }
-                  >
-                    <RiGitCommitLine className="size-3.5" />
-                    {e.head_sha.slice(0, 7)}
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </TableCell>
-              <TableCell className="text-end text-muted-foreground tabular-nums">
-                {e.started_at
-                  ? formatDuration(e.started_at, e.finished_at ?? now)
-                  : "—"}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
     </div>
   )
 }

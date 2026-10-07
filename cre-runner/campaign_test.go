@@ -23,7 +23,8 @@ type fakePostgREST struct {
 	campaign   map[string]any // nil = not found
 	repos      []string
 	executions int
-	requests   []string // "METHOD table?query"
+	execRows   []map[string]any // served by GET cre_executions
+	requests   []string         // "METHOD table?query"
 	bodies     map[string]string
 }
 
@@ -70,8 +71,12 @@ func (f *fakePostgREST) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	case "HEAD cre_executions", "GET cre_executions":
-		w.Header().Set("Content-Range", "*/"+itoa(f.executions))
-		_, _ = io.WriteString(w, "[]")
+		w.Header().Set("Content-Range", "*/"+itoa(max(f.executions, len(f.execRows))))
+		rows := f.execRows
+		if rows == nil {
+			rows = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(rows)
 	case "DELETE campaigns":
 		f.campaign = nil
 		w.WriteHeader(http.StatusNoContent)

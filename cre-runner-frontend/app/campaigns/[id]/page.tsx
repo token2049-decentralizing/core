@@ -3,7 +3,13 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { RiCheckLine, RiCloseLine } from "@remixicon/react"
 
-import { attempt, getCampaign, type Campaign } from "@/lib/api"
+import {
+  attempt,
+  getCampaign,
+  isExecutionActive,
+  listExecutions,
+  type Campaign,
+} from "@/lib/api"
 import {
   formatAmount,
   formatDate,
@@ -11,10 +17,14 @@ import {
   humanize,
 } from "@/lib/format"
 import { ApiErrorState } from "@/components/api-error-state"
+import { AutoRefresh } from "@/components/auto-refresh"
+import { ExecutionTable } from "@/components/execution-table"
 import { CampaignActions } from "@/components/campaign-actions"
 import { CampaignStatusBadge } from "@/components/campaign-status-badge"
 import { ExecutionLookup } from "@/components/execution-lookup"
 import { PageBody, PageHeader, Section } from "@/components/page"
+
+const RECENT_EXECUTIONS = 8
 
 export async function generateMetadata(
   props: PageProps<"/campaigns/[id]">
@@ -28,7 +38,10 @@ export default async function CampaignPage(
   props: PageProps<"/campaigns/[id]">
 ) {
   const { id } = await props.params
-  const result = await attempt(getCampaign(id))
+  const [result, executions] = await Promise.all([
+    attempt(getCampaign(id)),
+    attempt(listExecutions({ campaign_id: id, page_size: RECENT_EXECUTIONS })),
+  ])
 
   if (!result.ok) {
     if (result.error.status === 404) notFound()
@@ -44,9 +57,13 @@ export default async function CampaignPage(
   }
 
   const campaign = result.data
+  const recent = executions.ok ? executions.data.data : []
+  // Rendered per request on the server: running durations count up to now.
+  const now = new Date().toISOString()
 
   return (
     <PageBody>
+      <AutoRefresh active={recent.some(isExecutionActive)} />
       <PageHeader
         title={campaign.name}
         description={
@@ -94,6 +111,41 @@ export default async function CampaignPage(
           unit="before the budget runs out"
         />
       </dl>
+
+      <Section
+        title={
+          executions.ok
+            ? `CRE executions (${executions.data.pagination.total})`
+            : "CRE executions"
+        }
+        actions={
+          executions.ok && executions.data.pagination.total > 0 ? (
+            <Link
+              href={`/executions?campaign_id=${campaign.id}`}
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              View all
+            </Link>
+          ) : undefined
+        }
+      >
+        {executions.ok ? (
+          <ExecutionTable
+            executions={recent}
+            now={now}
+            showCampaign={false}
+            emptyHint={
+              campaign.status === "active"
+                ? "Open, push to or merge a pull request in one of the campaign's repositories to start one."
+                : "Only active campaigns run CRE evaluations. Activate this campaign to start."
+            }
+          />
+        ) : (
+          <p className="text-xs text-destructive">
+            Couldn&apos;t load executions: {executions.error.message}
+          </p>
+        )}
+      </Section>
 
       <div className="grid gap-10 lg:grid-cols-[1fr_20rem]">
         <div className="flex min-w-0 flex-col gap-10">

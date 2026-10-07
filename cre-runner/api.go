@@ -60,6 +60,8 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.PATCH("/campaigns/:id", a.updateCampaign)
 	g.DELETE("/campaigns/:id", a.deleteCampaign)
 	g.GET("/campaigns/:id/repos/:owner/:repo/prs/:number/executions", a.listPRExecutions)
+	g.GET("/executions", a.listExecutions)
+	g.GET("/executions/:id", a.getExecution)
 }
 
 func apiError(c *gin.Context, status int, msg string) {
@@ -925,48 +927,58 @@ func (a *api) deleteCampaign(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// Executions: GET /api/executions, GET /api/executions/:id,
 // GET /api/campaigns/:id/repos/:owner/:repo/prs/:number/executions
 
-// executionColumns leaves out runner internals (request payload, runner_instance).
+// executionColumns leaves out runner internals (request payload, runner_instance)
+// and embeds the campaign so lists can show its name and reward asset.
 const executionColumns = "id,delivery_id,campaign_id,repository_full_name,pr_number,event,head_sha,status," +
-	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at"
+	"score,eligible,reward,evaluation_hash,policy_hash,settled,error,created_at,started_at,finished_at," +
+	"campaign:campaigns(id,name,reward_asset)"
 
-type executionItem struct {
-	ID                 string  `json:"id"`
-	DeliveryID         string  `json:"delivery_id"`
-	CampaignID         string  `json:"campaign_id"`
-	RepositoryFullName string  `json:"repository_full_name"`
-	PRNumber           int     `json:"pr_number"`
-	Event              string  `json:"event"`
-	HeadSHA            *string `json:"head_sha"`
-	Status             string  `json:"status"`
-	Score              *int    `json:"score"`
-	Eligible           *bool   `json:"eligible"`
-	Reward             *string `json:"reward"` // token base units
-	EvaluationHash     *string `json:"evaluation_hash"`
-	PolicyHash         *string `json:"policy_hash"`
-	Settled            bool    `json:"settled"`
-	Error              *string `json:"error"`
-	CreatedAt          string  `json:"created_at"`
-	StartedAt          *string `json:"started_at"`
-	FinishedAt         *string `json:"finished_at"`
+type executionCampaign struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RewardAsset string `json:"reward_asset"`
 }
 
-func (a *api) listPRExecutions(c *gin.Context) {
-	id := c.Param("id")
-	repo := c.Param("owner") + "/" + c.Param("repo")
-	number, err := strconv.Atoi(c.Param("number"))
-	switch {
-	case !uuidRe.MatchString(id):
-		apiError(c, http.StatusNotFound, "campaign not found")
-		return
-	case !repoFullNameRe.MatchString(repo):
-		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
-		return
-	case err != nil || number <= 0 || number > 1<<31-1:
-		apiError(c, http.StatusBadRequest, "number must be a positive integer")
-		return
-	}
+type executionItem struct {
+	ID                 string             `json:"id"`
+	DeliveryID         string             `json:"delivery_id"`
+	CampaignID         string             `json:"campaign_id"`
+	Campaign           *executionCampaign `json:"campaign"`
+	RepositoryFullName string             `json:"repository_full_name"`
+	PRNumber           int                `json:"pr_number"`
+	Event              string             `json:"event"`
+	HeadSHA            *string            `json:"head_sha"`
+	Status             string             `json:"status"`
+	Score              *int               `json:"score"`
+	Eligible           *bool              `json:"eligible"`
+	Reward             *string            `json:"reward"` // token base units
+	EvaluationHash     *string            `json:"evaluation_hash"`
+	PolicyHash         *string            `json:"policy_hash"`
+	Settled            bool               `json:"settled"`
+	Error              *string            `json:"error"`
+	CreatedAt          string             `json:"created_at"`
+	StartedAt          *string            `json:"started_at"`
+	FinishedAt         *string            `json:"finished_at"`
+}
+
+type executionDetail struct {
+	executionItem
+	Request        json.RawMessage `json:"request"` // HTTP trigger payload sent to the workflow
+	RunnerInstance *string         `json:"runner_instance"`
+}
+
+var executionStatuses = []string{statusQueued, statusRunning, statusCompleted, statusFailed, statusSkipped}
+
+type executionFilter struct {
+	campaignID, repo, status, event string
+	pr                              int
+}
+
+// writeExecutions responds with one page of executions matching f, newest first.
+func (a *api) writeExecutions(c *gin.Context, f executionFilter) {
 	page, err := queryInt(c, "page", 0, 0, 1_000_000)
 	if err != nil {
 		apiError(c, http.StatusBadRequest, err.Error())
@@ -977,26 +989,24 @@ func (a *api) listPRExecutions(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	// 404 for an unknown campaign; an empty list means the PR simply has no executions yet.
-	var campaigns []struct {
-		ID string `json:"id"`
-	}
-	if _, err := a.db.From("campaigns").Select("id", "", false).Eq("id", id).Limit(1, "").ExecuteTo(&campaigns); err != nil {
-		internalError(c, "load executions", err)
-		return
-	}
-	if len(campaigns) == 0 {
-		apiError(c, http.StatusNotFound, "campaign not found")
-		return
-	}
-
 	filter := func(columns string, head bool) *postgrest.FilterBuilder {
-		return a.db.From(executionsTable).
-			Select(columns, "exact", head).
-			Eq("campaign_id", id).
-			Eq("repository_full_name", repo).
-			Eq("pr_number", strconv.Itoa(number))
+		q := a.db.From(executionsTable).Select(columns, "exact", head)
+		if f.campaignID != "" {
+			q = q.Eq("campaign_id", f.campaignID)
+		}
+		if f.repo != "" {
+			q = q.Eq("repository_full_name", f.repo)
+		}
+		if f.pr > 0 {
+			q = q.Eq("pr_number", strconv.Itoa(f.pr))
+		}
+		if f.status != "" {
+			q = q.Eq("status", f.status)
+		}
+		if f.event != "" {
+			q = q.Eq("event", f.event)
+		}
+		return q
 	}
 	var rows []executionItem
 	from := page * pageSize
@@ -1025,4 +1035,88 @@ func (a *api) listPRExecutions(c *gin.Context) {
 			"has_more":  int64(from+len(rows)) < total,
 		},
 	})
+}
+
+// GET /api/executions?campaign_id=&repo=&pr=&status=&event=
+func (a *api) listExecutions(c *gin.Context) {
+	f := executionFilter{campaignID: c.Query("campaign_id"), repo: c.Query("repo"),
+		status: c.Query("status"), event: c.Query("event")}
+	pr, err := queryInt(c, "pr", 0, 1, 1<<31-1)
+	switch {
+	case f.campaignID != "" && !uuidRe.MatchString(f.campaignID):
+		apiError(c, http.StatusBadRequest, "campaign_id must be a UUID")
+		return
+	case f.repo != "" && !repoFullNameRe.MatchString(f.repo):
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	case err != nil:
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	case f.status != "" && !slices.Contains(executionStatuses, f.status):
+		apiError(c, http.StatusBadRequest, "status must be one of "+strings.Join(executionStatuses, ", "))
+		return
+	case f.event != "" && f.event != "opened" && f.event != "merged":
+		apiError(c, http.StatusBadRequest, "event must be opened or merged")
+		return
+	}
+	f.pr = pr
+	a.writeExecutions(c, f)
+}
+
+// GET /api/executions/:id
+func (a *api) getExecution(c *gin.Context) {
+	id := c.Param("id")
+	if !uuidRe.MatchString(id) {
+		apiError(c, http.StatusNotFound, "execution not found")
+		return
+	}
+	var rows []executionDetail
+	_, err := a.db.From(executionsTable).
+		Select(executionColumns+",request,runner_instance", "", false).
+		Eq("id", id).
+		Limit(1, "").
+		ExecuteTo(&rows)
+	if err != nil {
+		internalError(c, "load execution", err)
+		return
+	}
+	if len(rows) == 0 {
+		apiError(c, http.StatusNotFound, "execution not found")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
+}
+
+func (a *api) listPRExecutions(c *gin.Context) {
+	id := c.Param("id")
+	repo := c.Param("owner") + "/" + c.Param("repo")
+	number, err := strconv.Atoi(c.Param("number"))
+	switch {
+	case !uuidRe.MatchString(id):
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	case !repoFullNameRe.MatchString(repo):
+		apiError(c, http.StatusBadRequest, "repo must be owner/repo")
+		return
+	case err != nil || number <= 0 || number > 1<<31-1:
+		apiError(c, http.StatusBadRequest, "number must be a positive integer")
+		return
+	}
+	if _, err := queryInt(c, "page_size", defaultPageSize, 1, maxPageSize); err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 404 for an unknown campaign; an empty list means the PR simply has no executions yet.
+	var campaigns []struct {
+		ID string `json:"id"`
+	}
+	if _, err := a.db.From("campaigns").Select("id", "", false).Eq("id", id).Limit(1, "").ExecuteTo(&campaigns); err != nil {
+		internalError(c, "load executions", err)
+		return
+	}
+	if len(campaigns) == 0 {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	a.writeExecutions(c, executionFilter{campaignID: id, repo: repo, pr: number})
 }
