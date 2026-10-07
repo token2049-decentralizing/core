@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -101,6 +102,11 @@ func solanaPayoutsFromEnv() (*solana.Payouts, error) {
 	}, nil
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // validEVMKey: 64 hex characters (optional 0x), not zero and not the CLI's default key 0x…01.
 func validEVMKey(k string) bool {
 	k = strings.TrimPrefix(strings.TrimSpace(k), "0x")
@@ -168,6 +174,9 @@ func setupExecutions(r *gin.Engine, db *supabase.Client, port string) (*executor
 	if creAuth == "none" {
 		log.Printf("no CRE credentials (CRE_API_KEY, CRE_LOGIN_YAML or ~/.cre/cre.yaml); executions will fail to authenticate")
 	}
+	if limits := env("CRE_LIMITS", "simulation-limits.json"); fileExists(filepath.Join(sim.Dir, limits)) || filepath.IsAbs(limits) {
+		sim.Limits = limits
+	}
 	concurrency := envInt("MAX_CONCURRENCY", 2)
 	if sim.Wasm == "" && concurrency > 1 {
 		// Without a prebuilt WASM the CLI compiles to a fixed temp file; parallel runs would clash.
@@ -208,8 +217,8 @@ func setupExecutions(r *gin.Engine, db *supabase.Client, port string) (*executor
 	if err := x.RecoverInterrupted(); err != nil {
 		log.Printf("recover interrupted executions: %v", err)
 	}
-	log.Printf("CRE executions enabled: workflow=%s target=%s wasm=%q concurrency=%d instance=%s cre_auth=%s",
-		sim.Workflow, sim.Target, sim.Wasm, concurrency, x.instance, creAuth)
+	log.Printf("CRE executions enabled: workflow=%s target=%s wasm=%q limits=%q concurrency=%d instance=%s cre_auth=%s",
+		sim.Workflow, sim.Target, sim.Wasm, sim.Limits, concurrency, x.instance, creAuth)
 	return x, nil
 }
 

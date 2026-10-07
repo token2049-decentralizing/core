@@ -102,6 +102,9 @@ type reviewInput struct {
 	Diff       string
 	Files      map[string]bool // Paths changed in the PR; findings may only point at these.
 	Issue      *issueInfo
+	// UnreadableIssue is the linked issue's number when it exists but can't be read
+	// (the App lacks Issues: Read); the PR still counts as linked.
+	UnreadableIssue int
 }
 
 func userPrompt(in reviewInput) string {
@@ -114,6 +117,11 @@ func userPrompt(in reviewInput) string {
 		"pr_number":     in.PRNumber,
 		"lines_changed": map[string]int{"additions": in.PR.Additions, "deletions": in.PR.Deletions},
 		"untrusted":     untrusted, // JSON-escaped, so it cannot break out of its field.
+	}
+	if in.UnreadableIssue > 0 {
+		// Trusted note (outside "untrusted"): the PR does link an issue, only its text is missing.
+		msg["linked_issue_unreadable"] = fmt.Sprintf("The PR links issue #%d, but its text could not be read. "+
+			"Treat the PR as linked to an issue and judge relevance from the PR title, description and diff.", in.UnreadableIssue)
 	}
 	b, _ := json.MarshalIndent(msg, "", "  ")
 	return string(b)
@@ -209,9 +217,13 @@ func (r *reviewer) prepare(ctx context.Context, repo string, n int, headSHA stri
 	}
 
 	if num := FirstLinkedIssue(pr.Body); num > 0 {
-		if is, err := r.gh.issue(ctx, repo, num); err == nil {
+		is, err := r.gh.issue(ctx, repo, num)
+		switch {
+		case err == nil:
 			in.Issue = is
-		} else if !errors.Is(err, errNotFound) {
+		case errors.Is(err, errForbidden):
+			in.UnreadableIssue = num // Review without the issue text rather than fail.
+		case !errors.Is(err, errNotFound):
 			return reviewInput{}, err
 		}
 	}

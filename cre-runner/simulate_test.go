@@ -125,11 +125,12 @@ func TestCLISimulator(t *testing.T) {
 func TestCLISimulatorBroadcast(t *testing.T) {
 	bin := fakeCLI(t, fixture(t, "success.txt"))
 	sim := &cliSimulator{Bin: bin, Dir: t.TempDir(), Workflow: "w", Target: "t", Timeout: 10 * time.Second,
-		Tokens: ghapp.Static("x"), Broadcast: true}
+		Tokens: ghapp.Static("x"), Broadcast: true, Limits: "simulation-limits.json"}
 	_, err := sim.Evaluate(context.Background(), testRequest, testConfig(t))
 	require.NoError(t, err)
 	raw, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "args"))
 	require.Contains(t, strings.Split(string(raw), "\n"), "--broadcast")
+	require.Contains(t, string(raw), "--limits\nsimulation-limits.json\n")
 	env, _ := os.ReadFile(filepath.Join(filepath.Dir(bin), "env"))
 	require.Contains(t, string(env), "CRE_SOLANA_RPC_URL=https://api.devnet.solana.com") // Default.
 }
@@ -146,4 +147,22 @@ func TestCLISimulatorFailureAndMissingBinary(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, strings.Contains(err.Error(), "no result"), err.Error())
 	require.NotErrorAs(t, err, &ee)
+}
+
+// The committed limits file must only raise the Solana report size above a RewardReport
+// write (298 bytes); everything else stays at the CLI defaults.
+func TestSimulationLimitsFile(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("cre", "simulation-limits.json"))
+	require.NoError(t, err)
+	var limits struct {
+		ChainWrite struct {
+			Solana struct {
+				ReportSizeLimit string `json:"ReportSizeLimit"`
+			} `json:"Solana"`
+		} `json:"ChainWrite"`
+		ExecutionTimeout string `json:"ExecutionTimeout"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &limits))
+	require.Equal(t, "1kb", limits.ChainWrite.Solana.ReportSizeLimit)
+	require.Equal(t, "5m0s", limits.ExecutionTimeout)
 }

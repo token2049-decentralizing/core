@@ -37,6 +37,10 @@ type cliSimulator struct {
 	Broadcast bool
 	// SolanaRPC becomes CRE_SOLANA_RPC_URL, which project.yaml uses for solana-devnet.
 	SolanaRPC string
+	// Limits is a simulation limits file (`cre workflow limits export`), relative to Dir.
+	// cre/simulation-limits.json raises only the Solana report size: a RewardReport write is
+	// 298 bytes and the default limit (the production DON's) is 265.
+	Limits string
 }
 
 // evalError is a failure inside the workflow (bad PR, GitHub error...), not in the runner.
@@ -71,6 +75,9 @@ func (s *cliSimulator) Evaluate(ctx context.Context, req *evaluationRequest, cfg
 	}
 	if s.Broadcast {
 		args = append(args, "--broadcast")
+	}
+	if s.Limits != "" {
+		args = append(args, "--limits", s.Limits)
 	}
 	cmd := exec.CommandContext(ctx, s.Bin, args...)
 	cmd.Dir = s.Dir

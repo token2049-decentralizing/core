@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,4 +174,36 @@ func TestAppFromEnvKeyContents(t *testing.T) {
 	t.Setenv("GITHUB_APP_PRIVATE_KEY", "")
 	_, err = SourceFromEnv()
 	require.Error(t, err)
+}
+
+type countingTokens struct {
+	calls int
+	token string
+	err   error
+}
+
+func (c *countingTokens) ForRepo(string) TokenSource { return c }
+
+func (c *countingTokens) Token(context.Context) (string, error) {
+	c.calls++
+	return c.token, c.err
+}
+
+func TestFallback(t *testing.T) {
+	primary := &countingTokens{token: "with-issues"}
+	fallback := &countingTokens{token: "read-only"}
+	tok, err := Fallback(primary, fallback).ForRepo("acme/pool").Token(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "with-issues", tok)
+
+	// The App lacks the permission: fall back, and stop asking primary for a while.
+	primary.err = errors.New("HTTP 422: permission not granted")
+	f := Fallback(primary, fallback)
+	for range 3 {
+		tok, err = f.ForRepo("acme/pool").Token(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "read-only", tok)
+	}
+	require.Equal(t, 2, primary.calls) // 1 success above + 1 failure here.
+	require.Equal(t, 3, fallback.calls)
 }

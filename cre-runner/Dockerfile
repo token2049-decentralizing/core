@@ -41,7 +41,7 @@ COPY --from=build /run-app /usr/local/bin/
 
 WORKDIR /app/cre
 # Owned by app: host files may be 0600 (e.g. from cre init) and must stay readable.
-COPY --chown=app:app cre/project.yaml cre/secrets.yaml cre/.env.public ./
+COPY --chown=app:app cre/project.yaml cre/secrets.yaml cre/.env.public cre/simulation-limits.json ./
 COPY --chown=app:app cre/test-workflow/workflow.yaml cre/test-workflow/config.local.json \
      cre/test-workflow/config.docker.json cre/test-workflow/config.production.json test-workflow/
 COPY --chown=app:app --from=workflow /out/workflow.wasm build/workflow.wasm
