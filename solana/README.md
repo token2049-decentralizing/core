@@ -125,10 +125,10 @@ program `7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK`, state `5Tipz3yhTBdVsDbaB
 
 ## Workflow integration (todo)
 
-1. `cre generate-bindings solana -i ../solana/idl` from the CRE project (generates `WriteReportFromRewardReport`).
-2. In `solana.go`, for an eligible `merged` result: build `RewardReport`, derive the accounts above, call
+1. `cre generate-bindings solana -i ../../solana/idl` from `cre-runner/cre/` (generates `WriteReportFromRewardReport`).
+2. In `cre-runner/cre/test-workflow/solana.go`, for an eligible `merged` result: build `RewardReport`, derive the accounts above, call
    `WriteReportFromRewardReport`.
-3. Add a Solana devnet RPC to `project.yaml`; simulate with `--broadcast` (`CRE_SOLANA_PRIVATE_KEY` pays the fee).
+3. Add a Solana devnet RPC to `cre-runner/cre/project.yaml`; simulate with `--broadcast` (`CRE_SOLANA_PRIVATE_KEY` pays the fee).
 4. Map GitHub user -> Solana wallet (not decided yet).
 
 ## Security notes
