@@ -16,14 +16,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/privy"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/solana"
 )
 
 type fakeRecord struct {
-	row      executionRow
-	statuses []string
-	err      string
-	settled  bool
-	score    *int
+	row       executionRow
+	statuses  []string
+	err       string
+	settled   bool
+	score     *int
+	recipient string
+	payoutTx  string
 }
 
 type fakeStore struct {
@@ -31,6 +35,7 @@ type fakeStore struct {
 	campaigns []campaignRow
 	records   map[string]*fakeRecord
 	order     []string
+	wallets   map[int64]*contributorWallet
 }
 
 func newFakeStore(campaigns ...campaignRow) *fakeStore {
@@ -69,6 +74,22 @@ func (f *fakeStore) Update(id string, u *executionUpdate) error {
 	if u.Score != nil {
 		r.score = u.Score
 	}
+	if u.RecipientWallet != nil {
+		r.recipient = *u.RecipientWallet
+	}
+	if u.PayoutTx != nil {
+		r.payoutTx = *u.PayoutTx
+	}
+	return nil
+}
+
+func (f *fakeStore) SaveContributorWallet(w *contributorWallet) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.wallets == nil {
+		f.wallets = map[int64]*contributorWallet{}
+	}
+	f.wallets[w.GitHubUserID] = w
 	return nil
 }
 
@@ -148,8 +169,9 @@ func TestPRTriggerFrom(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	head := `"head":{"sha":"` + sha + `"}`
 
-	tr := prTriggerFrom(prEvent("opened", `{"pull_request":{"number":7,`+head+`}}`))
-	require.Equal(t, &prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "opened", HeadSHA: sha}, tr)
+	tr := prTriggerFrom(prEvent("opened", `{"pull_request":{"number":7,"user":{"id":101,"login":"alice"},`+head+`}}`))
+	require.Equal(t, &prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "opened", HeadSHA: sha,
+		AuthorID: 101, AuthorLogin: "alice"}, tr)
 	require.Equal(t, "opened", prTriggerFrom(prEvent("synchronize", `{"pull_request":{"number":7,`+head+`}}`)).Event)
 	require.Equal(t, "merged", prTriggerFrom(prEvent("closed", `{"pull_request":{"number":7,"merged":true,`+head+`}}`)).Event)
 
@@ -210,6 +232,11 @@ func TestWorkflowConfigGolden(t *testing.T) {
 	c.Eligibility = map[string]any{"merged": true, "ci_passed": true, "linked_issue": true}
 	cfg, err := buildWorkflowConfig(c, "https://api.github.com", "http://127.0.0.1:8080")
 	require.NoError(t, err)
+	cfg.Solana = &solana.Settings{ // As Payouts.Prepare fills it for a merged execution.
+		ChainSelector: solana.DevnetChainSelector, ProgramID: "FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA",
+		ForwarderProgram: solana.MockForwarderProgram, ForwarderState: solana.MockForwarderState,
+		Mint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", TokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+	}
 	got, err := json.MarshalIndent(cfg, "", "  ")
 	require.NoError(t, err)
 
@@ -345,6 +372,157 @@ func TestSettlementConflictKeepsResultWithoutPaying(t *testing.T) {
 	require.False(t, r.settled)
 	require.Equal(t, 90, *r.score)
 	require.Equal(t, "already settled by another execution", r.err)
+}
+
+type fakeWallets func(ctx context.Context, id int64, login string) (*privy.Wallet, error)
+
+func (f fakeWallets) WalletForGitHub(ctx context.Context, id int64, login string) (*privy.Wallet, error) {
+	return f(ctx, id, login)
+}
+
+const aliceWallet = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+
+func TestMergedPaysAuthorsWallet(t *testing.T) {
+	store := newFakeStore(usdcCampaign)
+	var sent atomic.Value
+	x := newTestExecutor(store, func(ctx context.Context, req *evaluationRequest, cfg *workflowConfig) (*evaluationResponse, error) {
+		sent.Store(req.RecipientWallet)
+		return eligibleResult(ctx, req, cfg)
+	}, 1, 1)
+	var lookups atomic.Int32
+	x.wallets = fakeWallets(func(_ context.Context, id int64, login string) (*privy.Wallet, error) {
+		lookups.Add(1)
+		assert.Equal(t, int64(101), id)
+		assert.Equal(t, "alice", login)
+		return &privy.Wallet{PrivyUserID: "did:privy:a", Address: aliceWallet, Pregenerated: true}, nil
+	})
+
+	// Previews never create wallets.
+	x.Submit(&prTrigger{DeliveryID: "d0", Repository: "acme/pool", PRNumber: 7, Event: "opened", AuthorID: 101, AuthorLogin: "alice"})
+	wait(x)
+	require.Zero(t, lookups.Load())
+
+	x = newTestExecutor(store, func(ctx context.Context, req *evaluationRequest, cfg *workflowConfig) (*evaluationResponse, error) {
+		sent.Store(req.RecipientWallet)
+		return eligibleResult(ctx, req, cfg)
+	}, 1, 1)
+	x.wallets = fakeWallets(func(_ context.Context, id int64, login string) (*privy.Wallet, error) {
+		lookups.Add(1)
+		return &privy.Wallet{PrivyUserID: "did:privy:a", Address: aliceWallet, Pregenerated: true}, nil
+	})
+	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged", AuthorID: 101, AuthorLogin: "alice"})
+	wait(x)
+
+	r := store.list()[1]
+	require.Equal(t, statusCompleted, r.statuses[len(r.statuses)-1])
+	require.True(t, r.settled)
+	require.Equal(t, aliceWallet, r.recipient)
+	require.Equal(t, aliceWallet, sent.Load())
+	require.Equal(t, "alice", *r.row.AuthorLogin)
+	require.Equal(t, int64(101), *r.row.AuthorGitHubID)
+	w := store.wallets[101]
+	require.Equal(t, aliceWallet, w.SolanaAddress)
+	require.NotNil(t, w.PregeneratedAt)
+}
+
+func TestMergedWithoutWalletFails(t *testing.T) {
+	store := newFakeStore(usdcCampaign)
+	var evals atomic.Int32
+	x := newTestExecutor(store, func(ctx context.Context, req *evaluationRequest, cfg *workflowConfig) (*evaluationResponse, error) {
+		evals.Add(1)
+		return eligibleResult(ctx, req, cfg)
+	}, 1, 1)
+	x.wallets = fakeWallets(func(context.Context, int64, string) (*privy.Wallet, error) {
+		return nil, errors.New("privy /v1/users -> HTTP 401")
+	})
+	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged", AuthorID: 101, AuthorLogin: "alice"})
+	x.Submit(&prTrigger{DeliveryID: "d2", Repository: "acme/pool", PRNumber: 8, Event: "merged"}) // No author in the webhook.
+	wait(x)
+
+	for _, r := range store.list() {
+		require.Equal(t, statusFailed, r.statuses[len(r.statuses)-1])
+		require.Contains(t, r.err, "recipient wallet:")
+		require.False(t, r.settled)
+	}
+	require.Zero(t, evals.Load())
+}
+
+type fakePayouts func(ctx context.Context, campaignID, recipient string) (*solana.Settings, error)
+
+func (f fakePayouts) Prepare(ctx context.Context, campaignID, recipient string) (*solana.Settings, error) {
+	return f(ctx, campaignID, recipient)
+}
+
+func aliceWallets() fakeWallets {
+	return func(context.Context, int64, string) (*privy.Wallet, error) {
+		return &privy.Wallet{PrivyUserID: "did:privy:a", Address: aliceWallet}, nil
+	}
+}
+
+func TestMergedPaysOnSolana(t *testing.T) {
+	store := newFakeStore(usdcCampaign)
+	var gotCfg *workflowConfig
+	x := newTestExecutor(store, func(ctx context.Context, req *evaluationRequest, cfg *workflowConfig) (*evaluationResponse, error) {
+		gotCfg = cfg
+		res, _ := eligibleResult(ctx, req, cfg)
+		res.PayoutTx = "5Sig"
+		return res, nil
+	}, 1, 1)
+	x.wallets = aliceWallets()
+	x.payouts = fakePayouts(func(_ context.Context, campaignID, recipient string) (*solana.Settings, error) {
+		assert.Equal(t, usdcCampaign.ID, campaignID)
+		assert.Equal(t, aliceWallet, recipient)
+		return &solana.Settings{ChainSelector: solana.DevnetChainSelector, Mint: "Mint111"}, nil
+	})
+	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged", AuthorID: 101, AuthorLogin: "alice"})
+	wait(x)
+
+	r := store.list()[0]
+	require.Equal(t, statusCompleted, r.statuses[len(r.statuses)-1])
+	require.True(t, r.settled)
+	require.Equal(t, "5Sig", r.payoutTx)
+	require.Equal(t, "Mint111", gotCfg.Solana.Mint)
+}
+
+func TestMergedNotOnChainIsNotSettled(t *testing.T) {
+	store := newFakeStore(usdcCampaign)
+	var evals atomic.Int32
+	x := newTestExecutor(store, func(ctx context.Context, req *evaluationRequest, cfg *workflowConfig) (*evaluationResponse, error) {
+		evals.Add(1)
+		return eligibleResult(ctx, req, cfg)
+	}, 1, 1)
+	x.wallets = aliceWallets()
+	x.payouts = fakePayouts(func(context.Context, string, string) (*solana.Settings, error) {
+		return nil, solana.ErrCampaignNotOnChain
+	})
+	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged", AuthorID: 101, AuthorLogin: "alice"})
+
+	// Previews don't touch Solana.
+	x.Submit(&prTrigger{DeliveryID: "d2", Repository: "acme/pool", PRNumber: 8, Event: "opened", AuthorID: 101, AuthorLogin: "alice"})
+	wait(x)
+
+	for _, r := range store.list() {
+		if r.row.Event == "merged" {
+			require.Equal(t, statusFailed, r.statuses[len(r.statuses)-1])
+			require.Contains(t, r.err, "solana payout: campaign is not set up on Solana")
+			require.False(t, r.settled)
+		} else {
+			require.Equal(t, statusCompleted, r.statuses[len(r.statuses)-1])
+		}
+	}
+	require.Equal(t, int32(1), evals.Load()) // Only the preview ran.
+}
+
+func TestSolanaPayoutsNeedRecipient(t *testing.T) {
+	store := newFakeStore(usdcCampaign)
+	x := newTestExecutor(store, okResult, 1, 1)
+	x.payouts = fakePayouts(func(context.Context, string, string) (*solana.Settings, error) {
+		t.Error("Prepare must not run without a recipient")
+		return nil, nil
+	})
+	x.Submit(&prTrigger{DeliveryID: "d1", Repository: "acme/pool", PRNumber: 7, Event: "merged"})
+	wait(x)
+	require.Contains(t, store.list()[0].err, "no recipient wallet")
 }
 
 func TestBusyExecutionFails(t *testing.T) {

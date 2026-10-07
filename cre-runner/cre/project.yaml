@@ -3,10 +3,12 @@
 # ==========================================================================
 # Per-target CLI settings. Targets themselves are defined in test-workflow/workflow.yaml.
 #
-# `cre workflow simulate` requires at least one chain RPC per target, even though the
-# workflow does not read any chain yet. Sepolia (public RPC) satisfies that; it is unused.
-# When Solana settlement lands, add the Solana devnet RPC here (name from
-# `cre workflow supported-chains`) and drop Sepolia.
+# `cre workflow simulate` requires at least one chain RPC per target. Sepolia (public RPC)
+# satisfies that; it is unused. solana-devnet carries the reward payouts: the workflow writes
+# reports to the contrib_oracle program (../../solana) through the mock forwarder, sent for
+# real with `--broadcast` and signed with CRE_SOLANA_PRIVATE_KEY. CRE_SOLANA_RPC_URL is set by
+# the runner from SOLANA_RPC_URL (default https://api.devnet.solana.com, which rate-limits
+# bursts; use a dedicated devnet RPC such as Helius).
 #
 # RPC URLs support ${VAR_NAME} so secrets stay out of this committed file.
 
@@ -14,11 +16,15 @@ local-simulation:
   rpcs:
     - chain-name: ethereum-testnet-sepolia
       url: https://ethereum-sepolia-rpc.publicnode.com
+    - chain-name: solana-devnet
+      url: ${CRE_SOLANA_RPC_URL}
 
 docker-simulation:
   rpcs:
     - chain-name: ethereum-testnet-sepolia
       url: https://ethereum-sepolia-rpc.publicnode.com
+    - chain-name: solana-devnet
+      url: ${CRE_SOLANA_RPC_URL}
 
 production-settings:
   rpcs:

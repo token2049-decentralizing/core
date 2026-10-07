@@ -24,6 +24,7 @@ type fakePostgREST struct {
 	repos      []string
 	executions int
 	execRows   []map[string]any // served by GET cre_executions
+	walletRows []map[string]any // served by GET contributor_wallets
 	requests   []string         // "METHOD table?query"
 	bodies     map[string]string
 }
@@ -73,6 +74,12 @@ func (f *fakePostgREST) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "HEAD cre_executions", "GET cre_executions":
 		w.Header().Set("Content-Range", "*/"+itoa(max(f.executions, len(f.execRows))))
 		rows := f.execRows
+		if rows == nil {
+			rows = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(rows)
+	case "GET contributor_wallets":
+		rows := f.walletRows
 		if rows == nil {
 			rows = []map[string]any{}
 		}
@@ -142,6 +149,7 @@ func TestUpdateCampaign(t *testing.T) {
 	require.Nil(t, written["description"])
 	require.Contains(t, written, "description") // Sent as null, not omitted.
 	require.Equal(t, 70.0, written["min_score"])
+	require.Contains(t, written, "treasury_address") // Unchanged value written back.
 	require.Equal(t, map[string]any{"merged": true}, written["eligibility"])
 
 	// Repos are diffed: one removed, one added.
@@ -204,4 +212,16 @@ func TestDeleteCampaign(t *testing.T) {
 	require.Nil(t, f.campaign)
 
 	require.Equal(t, http.StatusNotFound, do(r, http.MethodDelete, "/api/campaigns/"+testCampaignID, "").Code)
+}
+
+func TestUpdateCampaignTreasuryAddress(t *testing.T) {
+	f := &fakePostgREST{campaign: storedCampaign()}
+	r := newCampaignTestAPI(t, f)
+	vault := "J71zC1moNW1xf4bCWQ7SfC1kNafNoRyUrirAmEUGqdNr"
+	w := do(r, http.MethodPatch, "/api/campaigns/"+testCampaignID, `{"treasury_address":"`+vault+`"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var written map[string]any
+	require.NoError(t, json.Unmarshal([]byte(f.bodies["PATCH campaigns"]), &written))
+	require.Equal(t, vault, written["treasury_address"])
+	require.Equal(t, "Bug bash", written["name"]) // Everything else untouched.
 }

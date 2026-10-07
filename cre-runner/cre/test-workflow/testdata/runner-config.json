@@ -30,5 +30,13 @@
       "url": "http://127.0.0.1:8080/review/issue",
       "secretId": "REVIEWER_TOKEN"
     }
+  },
+  "solana": {
+    "chainSelector": 16423721717087811551,
+    "programId": "FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA",
+    "forwarderProgram": "7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK",
+    "forwarderState": "5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7",
+    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "tokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
   }
 }

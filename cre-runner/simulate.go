@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/token2049-decentralizing/core/cre-runner/internal/ghapp"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/solana"
 )
 
 // evaluator runs one evaluation. Swapped for a fake in tests.
@@ -30,6 +32,11 @@ type cliSimulator struct {
 	Timeout       time.Duration
 	Tokens        ghapp.Tokens
 	ReviewerToken string // REVIEWER_TOKEN workflow secret; empty when reviewers are stubbed
+	// Broadcast sends the workflow's chain writes (Solana payouts) for real; the CLI signs
+	// them with CRE_SOLANA_PRIVATE_KEY.
+	Broadcast bool
+	// SolanaRPC becomes CRE_SOLANA_RPC_URL, which project.yaml uses for solana-devnet.
+	SolanaRPC string
 }
 
 // evalError is a failure inside the workflow (bad PR, GitHub error...), not in the runner.
@@ -62,12 +69,16 @@ func (s *cliSimulator) Evaluate(ctx context.Context, req *evaluationRequest, cfg
 	if s.Wasm != "" {
 		args = append(args, "--wasm", s.Wasm)
 	}
+	if s.Broadcast {
+		args = append(args, "--broadcast")
+	}
 	cmd := exec.CommandContext(ctx, s.Bin, args...)
 	cmd.Dir = s.Dir
 	cmd.Env = append(childEnv(os.Environ()), "GITHUB_TOKEN_VALUE="+token)
 	if s.ReviewerToken != "" {
 		cmd.Env = append(cmd.Env, "REVIEWER_TOKEN_VALUE="+s.ReviewerToken)
 	}
+	cmd.Env = append(cmd.Env, "CRE_SOLANA_RPC_URL="+cmp.Or(s.SolanaRPC, solana.DevnetRPC))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 

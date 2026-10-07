@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/supabase-community/supabase-go"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/privy"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/solana"
 )
 
 const executionsTable = "cre_executions"
@@ -35,6 +37,8 @@ type evaluationRequest struct {
 	CampaignID string `json:"campaign_id"`
 	Event      string `json:"event"`
 	HeadSHA    string `json:"head_sha,omitempty"`
+	// PR author's Solana wallet, set for "merged" when Privy is configured.
+	RecipientWallet string `json:"recipient_wallet,omitempty"`
 }
 
 type evaluationResponse struct {
@@ -43,6 +47,7 @@ type evaluationResponse struct {
 	Reward         string `json:"reward"`
 	EvaluationHash string `json:"evaluation_hash"`
 	PolicyHash     string `json:"policy_hash"`
+	PayoutTx       string `json:"payout_tx,omitempty"` // Solana transaction that paid the reward
 }
 
 // prTrigger is the evaluation a pull_request webhook asks for.
@@ -52,6 +57,9 @@ type prTrigger struct {
 	PRNumber   int
 	Event      string // "opened" (preview, never pays) | "merged" (payout)
 	HeadSHA    string
+	// PR author; the payout goes to their Privy wallet.
+	AuthorID    int64
+	AuthorLogin string
 }
 
 var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -70,13 +78,18 @@ func prTriggerFrom(ev *webhookEvent) *prTrigger {
 			Head   struct {
 				SHA string `json:"sha"`
 			} `json:"head"`
+			User struct {
+				ID    int64  `json:"id"`
+				Login string `json:"login"`
+			} `json:"user"`
 		} `json:"pull_request"`
 	}
 	if err := json.Unmarshal(ev.Payload, &p); err != nil || p.PullRequest == nil || p.PullRequest.Number <= 0 {
 		return nil
 	}
 	pr := p.PullRequest
-	t := &prTrigger{DeliveryID: ev.DeliveryID, Repository: *ev.RepositoryFullName, PRNumber: pr.Number}
+	t := &prTrigger{DeliveryID: ev.DeliveryID, Repository: *ev.RepositoryFullName, PRNumber: pr.Number,
+		AuthorID: pr.User.ID, AuthorLogin: pr.User.Login}
 	switch *ev.Action {
 	case "opened", "reopened", "synchronize", "ready_for_review":
 		if pr.Draft {
@@ -110,20 +123,34 @@ type executionRow struct {
 	Status             string          `json:"status"`
 	Request            json.RawMessage `json:"request"`
 	RunnerInstance     string          `json:"runner_instance"`
+	AuthorLogin        *string         `json:"author_login"`
+	AuthorGitHubID     *int64          `json:"author_github_id"`
+}
+
+// contributorWallet is a row in public.contributor_wallets.
+type contributorWallet struct {
+	GitHubUserID   int64      `json:"github_user_id"`
+	GitHubLogin    string     `json:"github_login"`
+	PrivyUserID    string     `json:"privy_user_id"`
+	SolanaAddress  string     `json:"solana_address"`
+	PregeneratedAt *time.Time `json:"pregenerated_at,omitempty"` // only set when the runner created the Privy user
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // executionUpdate is a status change; nil fields are left as they are.
 type executionUpdate struct {
-	Status         string     `json:"status"`
-	Error          *string    `json:"error,omitempty"`
-	Score          *int       `json:"score,omitempty"`
-	Eligible       *bool      `json:"eligible,omitempty"`
-	Reward         *string    `json:"reward,omitempty"`
-	EvaluationHash *string    `json:"evaluation_hash,omitempty"`
-	PolicyHash     *string    `json:"policy_hash,omitempty"`
-	Settled        *bool      `json:"settled,omitempty"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	Status          string     `json:"status"`
+	Error           *string    `json:"error,omitempty"`
+	Score           *int       `json:"score,omitempty"`
+	Eligible        *bool      `json:"eligible,omitempty"`
+	Reward          *string    `json:"reward,omitempty"`
+	EvaluationHash  *string    `json:"evaluation_hash,omitempty"`
+	PolicyHash      *string    `json:"policy_hash,omitempty"`
+	Settled         *bool      `json:"settled,omitempty"`
+	RecipientWallet *string    `json:"recipient_wallet,omitempty"`
+	PayoutTx        *string    `json:"payout_tx,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
 type executionStore interface {
@@ -134,6 +161,8 @@ type executionStore interface {
 	SettledBy(campaignID, repo string, pr int) (string, error)
 	// FailUnfinished marks the instance's queued and running executions as failed.
 	FailUnfinished(instance, reason string) error
+	// SaveContributorWallet upserts the GitHub user's wallet.
+	SaveContributorWallet(w *contributorWallet) error
 }
 
 type supabaseStore struct {
@@ -197,6 +226,13 @@ func (s supabaseStore) FailUnfinished(instance, reason string) error {
 	return err
 }
 
+func (s supabaseStore) SaveContributorWallet(w *contributorWallet) error {
+	_, _, err := s.db.From("contributor_wallets").
+		Insert(w, true, "github_user_id", "minimal", "").
+		Execute()
+	return err
+}
+
 // isUniqueViolation reports Postgres 23505, e.g. a second settled row for one PR.
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "23505")
@@ -206,12 +242,25 @@ type warmer interface {
 	Warm(ctx context.Context, repo string, pr int, headSHA string) error
 }
 
+// payoutPreparer reads the campaign on Solana and creates the recipient's token account
+// (internal/solana).
+type payoutPreparer interface {
+	Prepare(ctx context.Context, campaignID, recipient string) (*solana.Settings, error)
+}
+
+// walletResolver finds or pregenerates a GitHub user's Solana wallet (internal/privy).
+type walletResolver interface {
+	WalletForGitHub(ctx context.Context, githubID int64, login string) (*privy.Wallet, error)
+}
+
 // executor runs CRE workflow executions in the background and records each one in
 // cre_executions: queued -> running -> completed | failed | skipped.
 type executor struct {
 	store    executionStore
 	eval     evaluator
-	warm     warmer // Optional: reviewer cache warm-up before each simulation.
+	warm     warmer         // Optional: reviewer cache warm-up before each simulation.
+	wallets  walletResolver // Optional: payout recipient for merged PRs.
+	payouts  payoutPreparer // Optional: pay merged PRs on Solana through the workflow.
 	config   func(campaignRow) (*workflowConfig, error)
 	instance string        // runner_instance of rows written by this process
 	admit    chan struct{} // queued + running; full -> the execution fails as busy
@@ -295,6 +344,9 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 	if t.HeadSHA != "" {
 		row.HeadSHA = &t.HeadSHA
 	}
+	if t.AuthorLogin != "" {
+		row.AuthorLogin, row.AuthorGitHubID = &t.AuthorLogin, &t.AuthorID
+	}
 	log := x.log.With("execution_id", row.ID, "delivery", t.DeliveryID, "campaign", c.ID,
 		"repository", t.Repository, "pr", t.PRNumber, "event", t.Event)
 	if err := x.store.Insert(row); err != nil {
@@ -348,6 +400,36 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 	if err := x.store.Update(row.ID, &executionUpdate{Status: statusRunning, StartedAt: &started}); err != nil {
 		log.Error("record running status failed", "error", err)
 	}
+	if req.Event == "merged" && x.wallets != nil {
+		addr, err := x.recipient(log, row.ID, t)
+		if err != nil {
+			if x.ctx.Err() != nil {
+				fail(errInterrupted)
+			} else {
+				fail("recipient wallet: " + err.Error())
+			}
+			return
+		}
+		req.RecipientWallet = addr
+	}
+	if req.Event == "merged" && x.payouts != nil {
+		if req.RecipientWallet == "" {
+			fail("solana payout: no recipient wallet (set PRIVY_APP_ID/PRIVY_APP_SECRET)")
+			return
+		}
+		// Not settled in the database unless paid on-chain: fail so the PR can be retried
+		// (redeliver the webhook) once the campaign is created and funded on Solana.
+		settings, err := x.payouts.Prepare(x.ctx, c.ID, req.RecipientWallet)
+		if err != nil {
+			if x.ctx.Err() != nil {
+				fail(errInterrupted)
+			} else {
+				fail("solana payout: " + err.Error())
+			}
+			return
+		}
+		cfg.Solana = settings
+	}
 	var res *evaluationResponse
 	if x.warm != nil {
 		err = x.warm.Warm(x.ctx, req.Repository, req.PRNumber, req.HeadSHA)
@@ -378,6 +460,9 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 		PolicyHash:     &res.PolicyHash,
 		Settled:        &settled,
 	}
+	if res.PayoutTx != "" {
+		u.PayoutTx = &res.PayoutTx
+	}
 	err = x.finish(log, row.ID, u)
 	if settled && isUniqueViolation(err) {
 		// Another runner instance settled this PR first: keep the result, never pay twice.
@@ -387,8 +472,34 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 		err = x.finish(log, row.ID, u)
 	}
 	if err == nil {
-		log.Info("execution completed", "score", res.Score, "eligible", res.Eligible, "settled", settled)
+		log.Info("execution completed", "score", res.Score, "eligible", res.Eligible, "settled", settled, "payout_tx", res.PayoutTx)
 	}
+}
+
+// recipient resolves the PR author's Solana wallet, pregenerating one from their GitHub
+// account if they never signed in, and records it before the workflow runs.
+func (x *executor) recipient(log *slog.Logger, id string, t *prTrigger) (string, error) {
+	if t.AuthorID <= 0 || t.AuthorLogin == "" {
+		return "", errors.New("webhook has no pull request author")
+	}
+	w, err := x.wallets.WalletForGitHub(x.ctx, t.AuthorID, t.AuthorLogin)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	cw := &contributorWallet{GitHubUserID: t.AuthorID, GitHubLogin: t.AuthorLogin, PrivyUserID: w.PrivyUserID,
+		SolanaAddress: w.Address, UpdatedAt: now}
+	if w.Pregenerated {
+		cw.PregeneratedAt = &now
+	}
+	if err := x.store.SaveContributorWallet(cw); err != nil {
+		log.Error("record contributor wallet failed", "error", err)
+	}
+	if err := x.store.Update(id, &executionUpdate{Status: statusRunning, RecipientWallet: &w.Address}); err != nil {
+		log.Error("record recipient wallet failed", "error", err)
+	}
+	log.Info("payout recipient resolved", "author", t.AuthorLogin, "wallet", w.Address, "pregenerated", w.Pregenerated)
+	return w.Address, nil
 }
 
 // finish records a terminal status.

@@ -17,11 +17,15 @@ import (
 	"syscall"
 	"time"
 
+	solanago "github.com/gagliardetto/solana-go"
+	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/supabase-community/supabase-go"
 	"github.com/token2049-decentralizing/core/cre-runner/internal/ghapp"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/privy"
 	"github.com/token2049-decentralizing/core/cre-runner/internal/reviewer"
+	"github.com/token2049-decentralizing/core/cre-runner/internal/solana"
 )
 
 func env(key, def string) string {
@@ -53,6 +57,42 @@ func runnerInstance() string {
 	}
 	host, _ := os.Hostname()
 	return host
+}
+
+// solanaPayoutsFromEnv enables on-chain payouts when CRE_SOLANA_PRIVATE_KEY (the key the
+// cre CLI signs the forwarder transaction with) and SOLANA_PROGRAM_ID are set.
+func solanaPayoutsFromEnv() (*solana.Payouts, error) {
+	key, programID := os.Getenv("CRE_SOLANA_PRIVATE_KEY"), os.Getenv("SOLANA_PROGRAM_ID")
+	if key == "" || programID == "" {
+		return nil, nil
+	}
+	payer, err := solana.ParsePrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("CRE_SOLANA_PRIVATE_KEY: %w", err)
+	}
+	keys := map[string]string{
+		"SOLANA_PROGRAM_ID":        programID,
+		"SOLANA_FORWARDER_PROGRAM": env("SOLANA_FORWARDER_PROGRAM", solana.MockForwarderProgram),
+		"SOLANA_FORWARDER_STATE":   env("SOLANA_FORWARDER_STATE", solana.MockForwarderState),
+	}
+	parsed := map[string]solanago.PublicKey{}
+	for name, v := range keys {
+		if parsed[name], err = solanago.PublicKeyFromBase58(v); err != nil {
+			return nil, fmt.Errorf("%s %q is not a Solana address", name, v)
+		}
+	}
+	selector, err := strconv.ParseUint(env("SOLANA_CHAIN_SELECTOR", strconv.FormatUint(solana.DevnetChainSelector, 10)), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("SOLANA_CHAIN_SELECTOR: %w", err)
+	}
+	return &solana.Payouts{
+		RPC:              rpc.New(env("SOLANA_RPC_URL", solana.DevnetRPC)),
+		Payer:            payer,
+		ChainSelector:    selector,
+		ProgramID:        parsed["SOLANA_PROGRAM_ID"],
+		ForwarderProgram: parsed["SOLANA_FORWARDER_PROGRAM"],
+		ForwarderState:   parsed["SOLANA_FORWARDER_STATE"],
+	}, nil
 }
 
 // setupExecutions mounts the reviewer and returns the CRE executor, or nil when no
@@ -118,6 +158,29 @@ func setupExecutions(r *gin.Engine, db *supabase.Client, port string) (*executor
 	x := newExecutor(supabaseStore{db}, sim, config, runnerInstance(), concurrency, envInt("MAX_QUEUE", 16), slog.Default())
 	if rev != nil {
 		x.warm = rev
+	}
+	// Merged PRs pay the author's Privy wallet, pregenerated from their GitHub account if needed.
+	if appID, secret := os.Getenv("PRIVY_APP_ID"), os.Getenv("PRIVY_APP_SECRET"); appID != "" && secret != "" {
+		x.wallets = &privy.Client{AppID: appID, AppSecret: secret, BaseURL: os.Getenv("PRIVY_API_URL")}
+		log.Printf("payout wallets: Privy app %s", appID)
+	} else {
+		log.Printf("PRIVY_APP_ID/PRIVY_APP_SECRET not set; merged PRs are evaluated without a recipient wallet")
+	}
+	payouts, err := solanaPayoutsFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("solana payouts: %w", err)
+	}
+	if payouts != nil {
+		if x.wallets == nil {
+			return nil, errors.New("solana payouts need recipient wallets: set PRIVY_APP_ID and PRIVY_APP_SECRET")
+		}
+		x.payouts = payouts
+		sim.Broadcast = true
+		sim.SolanaRPC = env("SOLANA_RPC_URL", solana.DevnetRPC)
+		log.Printf("solana payouts: program %s, payer %s, forwarder state %s",
+			payouts.ProgramID, payouts.Payer.PublicKey(), payouts.ForwarderState)
+	} else {
+		log.Printf("CRE_SOLANA_PRIVATE_KEY/SOLANA_PROGRAM_ID not set; reward decisions are not paid on-chain")
 	}
 	if err := x.RecoverInterrupted(); err != nil {
 		log.Printf("recover interrupted executions: %v", err)

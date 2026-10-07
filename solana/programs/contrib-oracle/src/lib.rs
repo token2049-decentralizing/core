@@ -18,7 +18,7 @@ pub mod state;
 use instructions::*;
 use state::CampaignStatus;
 
-declare_id!("7b2qXnKKqskHKYZRCiKXohb6txqV3FYcSwSHXjdyGcSY");
+declare_id!("FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA");
 
 #[program]
 pub mod contrib_oracle {

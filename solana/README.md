@@ -123,13 +123,20 @@ Use the same UUID as the cre-runner campaign. Leave `--policy-hash` out to skip 
 Devnet mock forwarder (used by `cre workflow simulate --broadcast`):
 program `7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK`, state `5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7`.
 
-## Workflow integration (todo)
+## Workflow integration
 
-1. `cre generate-bindings solana -i ../../solana/idl` from `cre-runner/cre/` (generates `WriteReportFromRewardReport`).
-2. In `cre-runner/cre/test-workflow/solana.go`, for an eligible `merged` result: build `RewardReport`, derive the accounts above, call
-   `WriteReportFromRewardReport`.
-3. Add a Solana devnet RPC to `cre-runner/cre/project.yaml`; simulate with `--broadcast` (`CRE_SOLANA_PRIVATE_KEY` pays the fee).
-4. Map GitHub user -> Solana wallet (not decided yet).
+Done in `cre-runner` (see `cre-runner/DEPLOY.md` 3.5):
+
+- Go bindings generated into `cre-runner/cre/contracts/solana/src/generated/contrib_oracle`
+  (`cre generate-bindings solana -i ../../solana/idl -l go` from `cre-runner/cre/`). The workflow sets
+  `contrib_oracle.ProgramID` from its config, so a redeploy only needs `SOLANA_PROGRAM_ID` on the runner.
+- `cre-runner/cre/test-workflow/solana.go` builds the `RewardReport` and the 11 accounts above and calls
+  `WriteReportFromRewardReport` for eligible `merged` results. The account derivation is cross-checked
+  against `@solana/web3.js`.
+- `cre-runner/cre/project.yaml` has a `solana-devnet` RPC; the runner simulates with `--broadcast`, signed with
+  `CRE_SOLANA_PRIVATE_KEY`.
+- Recipient: the PR author's Privy Solana wallet, pregenerated from their GitHub account if they never signed in.
+  The runner creates their token account before the payout.
 
 ## Security notes
 

@@ -13,6 +13,7 @@ GITHUB_TOKEN_VALUE="$(cd .. && go run ./cmd/github-app-token)"
 export GITHUB_TOKEN_VALUE
 [ -n "$GITHUB_TOKEN_VALUE" ] || { echo "failed to mint GitHub token" >&2; exit 1; }
 export REVIEWER_TOKEN_VALUE="${REVIEWER_TOKEN:-}" # Workflow secret REVIEWER_TOKEN.
+export CRE_SOLANA_RPC_URL="${SOLANA_RPC_URL:-https://api.devnet.solana.com}" # project.yaml solana-devnet RPC.
 
 cre workflow simulate test-workflow --target "${CRE_TARGET:-local-simulation}" \
   --non-interactive --trigger-index 0 \

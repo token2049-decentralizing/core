@@ -5,12 +5,15 @@ import "encoding/json"
 // Contract between the GitHub App and this workflow.
 
 type EvaluationRequest struct {
-	Repository string         `json:"repository"` // "owner/repo"
-	PRNumber   int            `json:"pr_number"`
-	CampaignID string         `json:"campaign_id"`
-	Event      string         `json:"event"`              // "opened" | "merged"
-	HeadSHA    string         `json:"head_sha,omitempty"` // Optional: fail if the PR head moved.
-	Notes      map[string]any `json:"notes,omitempty"`    // Free-form, untrusted. Never affects score or reward.
+	Repository string `json:"repository"` // "owner/repo"
+	PRNumber   int    `json:"pr_number"`
+	CampaignID string `json:"campaign_id"`
+	Event      string `json:"event"`              // "opened" | "merged"
+	HeadSHA    string `json:"head_sha,omitempty"` // Optional: fail if the PR head moved.
+	// Solana address the reward goes to: the PR author's wallet, pregenerated from their
+	// GitHub account if they never signed in. Set by the runner for "merged".
+	RecipientWallet string         `json:"recipient_wallet,omitempty"`
+	Notes           map[string]any `json:"notes,omitempty"` // Free-form, untrusted. Never affects score or reward.
 }
 
 type EvaluationResponse struct {
@@ -19,6 +22,8 @@ type EvaluationResponse struct {
 	Reward         string `json:"reward"` // Token base units, as a string.
 	EvaluationHash string `json:"evaluation_hash"`
 	PolicyHash     string `json:"policy_hash"`
+	// Solana transaction that paid the reward (merged + eligible, Solana configured).
+	PayoutTx string `json:"payout_tx,omitempty"`
 }
 
 // Amounts are decimal strings in whole tokens ("500", "0.25"): no float math on money.
@@ -84,6 +89,18 @@ const (
 	ModeProduction = "production" // Deployable: requires authorizedKeys and real reviewers.
 )
 
+// SolanaConfig is where eligible merged results are paid: the contrib_oracle program
+// (../../solana) through the CRE forwarder. The runner sets it per campaign from the
+// on-chain campaign account; nil = the reward decision is only logged.
+type SolanaConfig struct {
+	ChainSelector    uint64 `json:"chainSelector"`    // solana-devnet: 16423721717087811551
+	ProgramID        string `json:"programId"`        // contrib_oracle
+	ForwarderProgram string `json:"forwarderProgram"` // keystone forwarder (mock in simulation)
+	ForwarderState   string `json:"forwarderState"`
+	Mint             string `json:"mint"`         // campaign's reward token
+	TokenProgram     string `json:"tokenProgram"` // owner of the mint: SPL Token or Token-2022
+}
+
 type Config struct {
 	Mode           string          `json:"mode"`
 	AuthorizedKeys []AuthorizedKey `json:"authorizedKeys"`
@@ -93,6 +110,7 @@ type Config struct {
 		CodeReviewer ReviewerConfig `json:"codeReviewer"`
 		LLM          ReviewerConfig `json:"llm"`
 	} `json:"reviewers"`
+	Solana *SolanaConfig `json:"solana,omitempty"`
 }
 
 type GitHubEvidence struct {

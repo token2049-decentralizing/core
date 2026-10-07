@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { WalletButton } from "@/components/wallet-button"
 
 type Crumb = { label: string; href?: string }
 
@@ -44,6 +45,16 @@ function crumbsFor(pathname: string): Crumb[] {
       { label: `${parts[1]}/${parts[2]}` },
     ]
   }
+
+  if (parts[0] === "executions") {
+    if (parts.length === 1) return [{ label: "CRE executions" }]
+    return [
+      { label: "CRE executions", href: "/executions" },
+      { label: shortId(parts[1]) },
+    ]
+  }
+
+  if (parts[0] === "me") return [{ label: "My rewards" }]
 
   if (parts[0] === "deliveries" && parts[1]) {
     return [{ label: "Deliveries" }, { label: shortId(parts[1]) }]
@@ -83,6 +94,7 @@ export function AppToolbar() {
       <div className="ms-auto flex items-center gap-1.5">
         <IdLookup />
         <ThemeToggle />
+        <WalletButton />
       </div>
     </header>
   )

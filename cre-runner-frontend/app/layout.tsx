@@ -9,6 +9,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { WalletProvider } from "@/components/wallet-provider"
 import { cn } from "@/lib/utils"
 
 const merriweatherHeading = Merriweather({
@@ -47,16 +48,18 @@ export default async function RootLayout({
     >
       <body>
         <ThemeProvider>
-          <TooltipProvider>
-            <SidebarProvider defaultOpen={sidebarOpen}>
-              <AppSidebar />
-              <SidebarInset>
-                <AppToolbar />
-                <div className="flex flex-1 flex-col">{children}</div>
-              </SidebarInset>
-            </SidebarProvider>
-            <Toaster position="bottom-right" />
-          </TooltipProvider>
+          <WalletProvider>
+            <TooltipProvider>
+              <SidebarProvider defaultOpen={sidebarOpen}>
+                <AppSidebar />
+                <SidebarInset>
+                  <AppToolbar />
+                  <div className="flex flex-1 flex-col">{children}</div>
+                </SidebarInset>
+              </SidebarProvider>
+              <Toaster position="bottom-right" />
+            </TooltipProvider>
+          </WalletProvider>
         </ThemeProvider>
       </body>
     </html>
