@@ -20,6 +20,8 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 | 6 | GET  | `/api/campaigns/{id}` | 单个 campaign 详情 |
 | 7 | POST | `/api/campaigns` | 创建 reward campaign，可附带仓库 |
 | 8 | GET  | `/api/campaigns/{id}/repos/{owner}/{repo}/prs/{number}/executions` | 某 campaign 下某仓库某 PR 的 CRE 执行记录 |
+| 9 | PATCH | `/api/campaigns/{id}` | 修改 campaign（部分字段，可改状态、替换仓库） |
+| 10 | DELETE | `/api/campaigns/{id}` | 删除 campaign（有 CRE 执行记录时不可删） |
 
 错误码：
 
@@ -27,6 +29,7 @@ Base URL：`https://cre-runner.fly.dev`（本地为 `http://localhost:8080`）
 |--------|------|
 | 400 | 参数不合法（`error` 中说明具体原因） |
 | 404 | 仓库 / delivery / campaign 不存在 |
+| 409 | campaign 有 CRE 执行记录，不能删除（接口 10） |
 | 500 | 服务端或数据库错误 |
 
 ---
@@ -689,6 +692,48 @@ curl "https://cre-runner.fly.dev/api/campaigns/1f0c6a52-0d0e-4b39-9a7e-2d6c1f4b8
 | `started_at` / `finished_at` | 开始运行 / 结束时间，未到该阶段为 `null` |
 
 PR 没有执行记录时返回空数组。campaign 不存在返回 404；`repo`、`number`、分页参数不合法返回 400。
+
+---
+
+## 9. 修改 campaign
+
+`PATCH /api/campaigns/{id}`
+
+只改请求体里出现的字段，字段与创建（接口 7）相同。
+
+- `null` 清空可选字段：`description`、`sponsor`、`min_score`、`starts_at`、`ends_at`；`eligibility`、`scoring` 设为 `null` 时变成 `{}`。
+- `status` 可设为 `draft` / `active` / `paused` / `ended`。只有 `active` 且在时间窗内的 campaign 会触发 CRE 执行。
+- `repos` 出现时**整体替换**该 campaign 关联的仓库，不出现则保持不变。
+- 合并后的结果按创建时的规则校验，例如 `max_reward_per_pr` 不能超过 `budget`。
+
+**请求示例**
+
+```bash
+# 激活 campaign 并把仓库换成两个
+curl -X PATCH https://cre-runner.fly.dev/api/campaigns/6e38c2a1-22f2-4f69-9f3d-779bf8a0502c \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active", "repos": ["token2049-decentralizing/core", "octo-org/hello-world"]}'
+```
+
+**响应**：`200`，`data` 为修改后的完整 campaign（格式同接口 6）。
+
+campaign 不存在返回 404，参数不合法返回 400。campaign 行和仓库列表是分两次写入的，仓库更新失败时返回 500，此时 campaign 字段可能已经改了。
+
+---
+
+## 10. 删除 campaign
+
+`DELETE /api/campaigns/{id}`
+
+成功返回 `204`（无响应体），关联的仓库一并删除。
+
+已有 CRE 执行记录的 campaign 是结算历史，不能删除，返回 `409`：
+
+```json
+{ "error": "campaign has 3 CRE executions and can't be deleted; set its status to ended instead" }
+```
+
+campaign 不存在返回 404。
 
 ---
 

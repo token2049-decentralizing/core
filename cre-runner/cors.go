@@ -20,7 +20,7 @@ func corsMiddleware(allowed []string) gin.HandlerFunc {
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Add("Vary", "Origin")
 			}
-			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			h.Set("Access-Control-Max-Age", "86400")
 		}

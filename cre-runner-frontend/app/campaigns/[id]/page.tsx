@@ -11,6 +11,7 @@ import {
   humanize,
 } from "@/lib/format"
 import { ApiErrorState } from "@/components/api-error-state"
+import { CampaignActions } from "@/components/campaign-actions"
 import { CampaignStatusBadge } from "@/components/campaign-status-badge"
 import { ExecutionLookup } from "@/components/execution-lookup"
 import { PageBody, PageHeader, Section } from "@/components/page"
@@ -57,10 +58,13 @@ export default async function CampaignPage(
           </div>
         }
         actions={
-          <CampaignStatusBadge
-            status={campaign.status}
-            className="h-6 px-2 text-xs"
-          />
+          <>
+            <CampaignStatusBadge
+              status={campaign.status}
+              className="h-6 px-2 text-xs"
+            />
+            <CampaignActions campaign={campaign} />
+          </>
         }
       />
 

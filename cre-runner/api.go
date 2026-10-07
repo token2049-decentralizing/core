@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -56,6 +57,8 @@ func registerAPI(r *gin.Engine, db *supabase.Client) {
 	g.GET("/campaigns", a.listCampaigns)
 	g.GET("/campaigns/:id", a.getCampaign)
 	g.POST("/campaigns", a.createCampaign)
+	g.PATCH("/campaigns/:id", a.updateCampaign)
+	g.DELETE("/campaigns/:id", a.deleteCampaign)
 	g.GET("/campaigns/:id/repos/:owner/:repo/prs/:number/executions", a.listPRExecutions)
 }
 
@@ -471,7 +474,8 @@ func positiveAmount(name string, n json.Number) (*big.Rat, error) {
 	return r, nil
 }
 
-func (req *createCampaignRequest) validate() (*campaignInsert, []string, error) {
+// validate checks the request; statuses lists what the caller may set.
+func (req *createCampaignRequest) validate(statuses []string) (*campaignInsert, []string, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		return nil, nil, errors.New("name is required")
@@ -507,8 +511,8 @@ func (req *createCampaignRequest) validate() (*campaignInsert, []string, error) 
 	if req.Status == "" {
 		req.Status = "draft"
 	}
-	if req.Status != "draft" && req.Status != "active" {
-		return nil, nil, errors.New(`status must be "draft" or "active"`)
+	if !slices.Contains(statuses, req.Status) {
+		return nil, nil, errors.New("status must be one of " + strings.Join(statuses, ", "))
 	}
 	if req.StartsAt != nil && req.EndsAt != nil && !req.EndsAt.After(*req.StartsAt) {
 		return nil, nil, errors.New("ends_at must be after starts_at")
@@ -554,7 +558,7 @@ func (a *api) createCampaign(c *gin.Context) {
 		apiError(c, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
-	campaign, repos, err := req.validate()
+	campaign, repos, err := req.validate([]string{"draft", "active"})
 	if err != nil {
 		apiError(c, http.StatusBadRequest, err.Error())
 		return
@@ -721,33 +725,204 @@ func (a *api) listCampaigns(c *gin.Context) {
 
 // GET /api/campaigns/:id
 
-func (a *api) getCampaign(c *gin.Context) {
-	id := c.Param("id")
+// loadCampaign returns the campaign with its "repos", or nil if there is none.
+func (a *api) loadCampaign(id string) (map[string]json.RawMessage, error) {
 	if !uuidRe.MatchString(id) {
-		// Not a UUID can't match any row; also avoids a Postgres cast error.
-		apiError(c, http.StatusNotFound, "campaign not found")
-		return
+		return nil, nil // Not a UUID can't match any row; also avoids a Postgres cast error.
 	}
-
 	var rows []map[string]json.RawMessage
 	_, err := a.db.From("campaigns").
 		Select(campaignColumns, "", false).
 		Eq("id", id).
 		Limit(1, "").
 		ExecuteTo(&rows)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	if err := flattenCampaignRepos(rows[0]); err != nil {
+		return nil, err
+	}
+	return rows[0], nil
+}
+
+func (a *api) getCampaign(c *gin.Context) {
+	row, err := a.loadCampaign(c.Param("id"))
 	if err != nil {
 		internalError(c, "load campaign", err)
 		return
 	}
-	if len(rows) == 0 {
+	if row == nil {
 		apiError(c, http.StatusNotFound, "campaign not found")
 		return
 	}
-	if err := flattenCampaignRepos(rows[0]); err != nil {
+	c.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+// PATCH /api/campaigns/:id
+
+// campaignUpdate writes every column, so cleared optional fields become null.
+type campaignUpdate struct {
+	Name           string          `json:"name"`
+	Description    *string         `json:"description"`
+	Sponsor        *string         `json:"sponsor"`
+	RewardAsset    string          `json:"reward_asset"`
+	Budget         json.Number     `json:"budget"`
+	MaxRewardPerPR json.Number     `json:"max_reward_per_pr"`
+	MinScore       *int            `json:"min_score"`
+	Eligibility    json.RawMessage `json:"eligibility"`
+	Scoring        json.RawMessage `json:"scoring"`
+	Status         string          `json:"status"`
+	StartsAt       *time.Time      `json:"starts_at"`
+	EndsAt         *time.Time      `json:"ends_at"`
+}
+
+func orEmptyObject(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+// updateCampaign applies the fields present in the body (null clears an optional field)
+// and validates the result like a new campaign. "repos", when present, replaces the set.
+func (a *api) updateCampaign(c *gin.Context) {
+	id := c.Param("id")
+	current, err := a.loadCampaign(id)
+	if err != nil {
 		internalError(c, "load campaign", err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
+	if current == nil {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
+	if err != nil {
+		apiError(c, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(body, &present); err != nil {
+		apiError(c, http.StatusBadRequest, "body must be a JSON object")
+		return
+	}
+
+	// Start from the stored campaign, then overlay the patch.
+	var req createCampaignRequest
+	stored, _ := json.Marshal(current)
+	if err := json.Unmarshal(stored, &req); err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	// Cloned: decoding the patch reuses req.Repos' backing array.
+	currentRepos := slices.Clone(req.Repos)
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		apiError(c, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if _, ok := present["repos"]; !ok {
+		req.Repos = currentRepos
+	}
+	campaign, repos, err := req.validate(campaignStatuses)
+	if err != nil {
+		apiError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	update := campaignUpdate{
+		Name:           campaign.Name,
+		Description:    campaign.Description,
+		Sponsor:        campaign.Sponsor,
+		RewardAsset:    campaign.RewardAsset,
+		Budget:         campaign.Budget,
+		MaxRewardPerPR: campaign.MaxRewardPerPR,
+		MinScore:       campaign.MinScore,
+		Eligibility:    orEmptyObject(campaign.Eligibility),
+		Scoring:        orEmptyObject(campaign.Scoring),
+		Status:         campaign.Status,
+		StartsAt:       campaign.StartsAt,
+		EndsAt:         campaign.EndsAt,
+	}
+	if _, _, err := a.db.From("campaigns").Update(update, "minimal", "").Eq("id", id).Execute(); err != nil {
+		internalError(c, "update campaign", err)
+		return
+	}
+
+	// PostgREST can't span requests in one transaction: repos are synced after the campaign row.
+	var removed, added []string
+	for _, r := range currentRepos {
+		if !slices.Contains(repos, r) {
+			removed = append(removed, r)
+		}
+	}
+	for _, r := range repos {
+		if !slices.Contains(currentRepos, r) {
+			added = append(added, r)
+		}
+	}
+	if len(removed) > 0 {
+		if _, _, err := a.db.From("campaign_repos").Delete("minimal", "").
+			Eq("campaign_id", id).In("repository_full_name", removed).Execute(); err != nil {
+			internalError(c, "update repos", err)
+			return
+		}
+	}
+	if len(added) > 0 {
+		rows := make([]campaignRepoInsert, len(added))
+		for i, r := range added {
+			rows[i] = campaignRepoInsert{CampaignID: id, RepositoryFullName: r}
+		}
+		if _, _, err := a.db.From("campaign_repos").Insert(rows, false, "", "minimal", "").Execute(); err != nil {
+			internalError(c, "update repos", err)
+			return
+		}
+	}
+
+	row, err := a.loadCampaign(id)
+	if err != nil || row == nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+// DELETE /api/campaigns/:id
+
+// deleteCampaign removes a campaign and its repos. Campaigns with CRE executions are
+// payout history and cannot be deleted; end them instead.
+func (a *api) deleteCampaign(c *gin.Context) {
+	id := c.Param("id")
+	current, err := a.loadCampaign(id)
+	if err != nil {
+		internalError(c, "load campaign", err)
+		return
+	}
+	if current == nil {
+		apiError(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	_, executions, err := a.db.From(executionsTable).Select("id", "exact", true).Eq("campaign_id", id).Execute()
+	if err != nil {
+		internalError(c, "delete campaign", err)
+		return
+	}
+	if executions > 0 {
+		apiError(c, http.StatusConflict, fmt.Sprintf(
+			"campaign has %d CRE executions and can't be deleted; set its status to ended instead", executions))
+		return
+	}
+	if _, _, err := a.db.From("campaigns").Delete("minimal", "").Eq("id", id).Execute(); err != nil {
+		if strings.Contains(err.Error(), "23503") { // An execution started meanwhile.
+			apiError(c, http.StatusConflict, "campaign has CRE executions and can't be deleted; set its status to ended instead")
+			return
+		}
+		internalError(c, "delete campaign", err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // GET /api/campaigns/:id/repos/:owner/:repo/prs/:number/executions

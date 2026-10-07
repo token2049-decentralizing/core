@@ -6,7 +6,14 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { RiAddLine, RiCloseLine, RiErrorWarningLine } from "@remixicon/react"
 
-import { createCampaign, type CreateCampaignInput } from "@/lib/api"
+import {
+  CAMPAIGN_STATUSES,
+  createCampaign,
+  updateCampaign,
+  type Campaign,
+  type CampaignStatus,
+  type CreateCampaignInput,
+} from "@/lib/api"
 import { humanize } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -71,21 +78,61 @@ type Errors = Partial<Record<string, string>>
 const pressed =
   "aria-pressed:border-primary aria-pressed:bg-primary/10 aria-pressed:text-primary"
 
-export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
+// datetime-local wants local time without a zone: "2026-10-07T13:30".
+function toLocalInput(iso: string | null) {
+  if (!iso) return ""
+  const d = new Date(iso)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16)
+}
+
+const noopSubscribe = () => () => {}
+
+// Creates a campaign, or edits `campaign` when given.
+export function CampaignForm({
+  knownRepos,
+  campaign,
+}: {
+  knownRepos: string[]
+  campaign?: Campaign
+}) {
   const router = useRouter()
+  const editing = campaign !== undefined
   const [pending, setPending] = React.useState(false)
   const [errors, setErrors] = React.useState<Errors>({})
   const [serverError, setServerError] = React.useState<string | null>(null)
+  // Dates are shown in the browser's time zone, which the server can't know.
+  const isClient = React.useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false
+  )
 
-  const [asset, setAsset] = React.useState<"USDC" | "SOL">("USDC")
-  const [status, setStatus] = React.useState<"draft" | "active">("draft")
+  const [asset, setAsset] = React.useState<"USDC" | "SOL">(
+    campaign?.reward_asset ?? "USDC"
+  )
+  const [status, setStatus] = React.useState<CampaignStatus>(
+    campaign?.status ?? "draft"
+  )
   const [eligibility, setEligibility] = React.useState<Record<string, boolean>>(
-    Object.fromEntries(ELIGIBILITY.map((e) => [e.key, e.initial]))
+    Object.fromEntries(
+      ELIGIBILITY.map((e) => {
+        const stored = campaign?.eligibility[e.key]
+        return [e.key, typeof stored === "boolean" ? stored : e.initial]
+      })
+    )
   )
   const [scoring, setScoring] = React.useState<Record<string, string>>(
-    Object.fromEntries(SCORING.map((s) => [s.key, String(s.initial)]))
+    Object.fromEntries(
+      SCORING.map((s) => {
+        if (!campaign) return [s.key, String(s.initial)]
+        const stored = campaign.scoring[s.key]
+        return [s.key, typeof stored === "number" ? String(stored) : ""]
+      })
+    )
   )
-  const [repos, setRepos] = React.useState<string[]>([])
+  const [repos, setRepos] = React.useState<string[]>(campaign?.repos ?? [])
   const [repoDraft, setRepoDraft] = React.useState("")
 
   const scoringTotal = Object.values(scoring).reduce(
@@ -175,7 +222,7 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
           .filter(([, v]) => v !== "")
           .map(([k, v]) => [k, Number(v)])
       ),
-      status,
+      status: status === "draft" || status === "active" ? status : "draft",
       starts_at: date("starts_at"),
       ends_at: date("ends_at"),
       repos,
@@ -183,17 +230,36 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
 
     setPending(true)
     try {
-      const campaign = await createCampaign(input)
-      toast.success(
-        status === "active"
-          ? "Campaign created and active"
-          : "Draft campaign created"
-      )
-      router.push(`/campaigns/${campaign.id}`)
+      let saved: Campaign
+      if (campaign) {
+        // Emptied optional fields are sent as null so they are cleared.
+        saved = await updateCampaign(campaign.id, {
+          ...input,
+          description: input.description ?? null,
+          sponsor: input.sponsor ?? null,
+          min_score: input.min_score ?? null,
+          starts_at: input.starts_at ?? null,
+          ends_at: input.ends_at ?? null,
+          status,
+        })
+        toast.success("Campaign saved")
+      } else {
+        saved = await createCampaign(input)
+        toast.success(
+          status === "active"
+            ? "Campaign created and active"
+            : "Draft campaign created"
+        )
+      }
+      router.push(`/campaigns/${saved.id}`)
       router.refresh()
     } catch (error) {
       setServerError(
-        error instanceof Error ? error.message : "Couldn't create the campaign."
+        error instanceof Error
+          ? error.message
+          : editing
+            ? "Couldn't save the campaign."
+            : "Couldn't create the campaign."
       )
       window.scrollTo({ top: 0, behavior: "smooth" })
       setPending(false)
@@ -205,7 +271,9 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
       {serverError && (
         <Alert variant="destructive">
           <RiErrorWarningLine />
-          <AlertTitle>The campaign wasn&apos;t created</AlertTitle>
+          <AlertTitle>
+            The campaign wasn&apos;t {editing ? "saved" : "created"}
+          </AlertTitle>
           <AlertDescription>{serverError}</AlertDescription>
         </Alert>
       )}
@@ -219,6 +287,7 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
               id="name"
               name="name"
               placeholder="OSS bug bash, Q4"
+              defaultValue={campaign?.name}
               aria-invalid={!!errors.name}
               required
             />
@@ -230,6 +299,7 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
               id="sponsor"
               name="sponsor"
               placeholder="Who is funding the rewards"
+              defaultValue={campaign?.sponsor ?? undefined}
             />
           </Field>
           <Field>
@@ -239,6 +309,7 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
               name="description"
               rows={3}
               placeholder="What kind of contributions this campaign rewards"
+              defaultValue={campaign?.description ?? undefined}
             />
           </Field>
         </FieldGroup>
@@ -272,6 +343,7 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
                 name="budget"
                 unit={asset}
                 placeholder="10000"
+                defaultValue={campaign ? String(campaign.budget) : undefined}
                 invalid={!!errors.budget}
               />
               <FieldError>{errors.budget}</FieldError>
@@ -283,6 +355,9 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
                 name="max_reward_per_pr"
                 unit={asset}
                 placeholder="500"
+                defaultValue={
+                  campaign ? String(campaign.max_reward_per_pr) : undefined
+                }
                 invalid={!!errors.max_reward_per_pr}
               />
               <FieldError>{errors.max_reward_per_pr}</FieldError>
@@ -294,6 +369,11 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
                 name="min_score"
                 inputMode="numeric"
                 placeholder="70"
+                defaultValue={
+                  campaign?.min_score != null
+                    ? String(campaign.min_score)
+                    : undefined
+                }
                 aria-invalid={!!errors.min_score}
               />
               {errors.min_score ? (
@@ -467,7 +547,15 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
         <div className="grid gap-5 sm:grid-cols-2">
           <Field>
             <FieldLabel htmlFor="starts_at">Starts</FieldLabel>
-            <Input id="starts_at" name="starts_at" type="datetime-local" />
+            <Input
+              key={isClient ? "client" : "server"}
+              id="starts_at"
+              name="starts_at"
+              type="datetime-local"
+              defaultValue={
+                isClient ? toLocalInput(campaign?.starts_at ?? null) : ""
+              }
+            />
             <FieldDescription>
               Leave empty to start right away.
             </FieldDescription>
@@ -475,9 +563,13 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
           <Field data-invalid={!!errors.ends_at || undefined}>
             <FieldLabel htmlFor="ends_at">Ends</FieldLabel>
             <Input
+              key={isClient ? "client" : "server"}
               id="ends_at"
               name="ends_at"
               type="datetime-local"
+              defaultValue={
+                isClient ? toLocalInput(campaign?.ends_at ?? null) : ""
+              }
               aria-invalid={!!errors.ends_at}
             />
             {errors.ends_at ? (
@@ -489,38 +581,72 @@ export function CampaignForm({ knownRepos }: { knownRepos: string[] }) {
             )}
           </Field>
         </div>
-        <Field orientation="horizontal" className="border p-3">
-          <FieldContent>
-            <FieldLabel htmlFor="activate">Activate right away</FieldLabel>
+        {editing ? (
+          <Field>
+            <FieldLabel>Status</FieldLabel>
+            <ToggleGroup
+              variant="outline"
+              spacing={0}
+              value={[status]}
+              onValueChange={(v) => v[0] && setStatus(v[0] as CampaignStatus)}
+              aria-label="Status"
+            >
+              {CAMPAIGN_STATUSES.map((s) => (
+                <ToggleGroupItem
+                  key={s}
+                  value={s}
+                  className={cn("w-20", pressed)}
+                >
+                  {humanize(s)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
             <FieldDescription>
-              Otherwise the campaign is saved as a draft that doesn&apos;t pay
-              out.
+              Only active campaigns run CRE evaluations on pull requests.
             </FieldDescription>
-          </FieldContent>
-          <Switch
-            id="activate"
-            checked={status === "active"}
-            onCheckedChange={(checked) =>
-              setStatus(checked ? "active" : "draft")
-            }
-          />
-        </Field>
+          </Field>
+        ) : (
+          <Field orientation="horizontal" className="border p-3">
+            <FieldContent>
+              <FieldLabel htmlFor="activate">Activate right away</FieldLabel>
+              <FieldDescription>
+                Otherwise the campaign is saved as a draft that doesn&apos;t pay
+                out.
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="activate"
+              checked={status === "active"}
+              onCheckedChange={(checked) =>
+                setStatus(checked ? "active" : "draft")
+              }
+            />
+          </Field>
+        )}
       </FieldSet>
 
       <div className="sticky bottom-0 -mx-4 flex items-center justify-end gap-2 border-t bg-background/90 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
         <Button
           variant="ghost"
           nativeButton={false}
-          render={<Link href="/campaigns" />}
+          render={
+            <Link
+              href={campaign ? `/campaigns/${campaign.id}` : "/campaigns"}
+            />
+          }
         >
           Cancel
         </Button>
         <Button type="submit" disabled={pending}>
-          {pending
-            ? "Creating…"
-            : status === "active"
-              ? "Create and activate"
-              : "Create draft"}
+          {editing
+            ? pending
+              ? "Saving…"
+              : "Save changes"
+            : pending
+              ? "Creating…"
+              : status === "active"
+                ? "Create and activate"
+                : "Create draft"}
         </Button>
       </div>
     </form>
