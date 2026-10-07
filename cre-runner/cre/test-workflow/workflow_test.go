@@ -42,6 +42,11 @@ func jsonBody(t *testing.T, v any) *http.Response {
 
 // mockAPIs fakes GitHub and the LLM reviewer; returns the URLs called.
 func mockAPIs(t *testing.T, llmScore int) *[]string {
+	return mockAPIsWith(t, map[string]any{"score": llmScore})
+}
+
+// mockAPIsWith fakes GitHub and an LLM reviewer that replies llmReply.
+func mockAPIsWith(t *testing.T, llmReply map[string]any) *[]string {
 	mock, err := httpmock.NewClientCapability(t)
 	require.NoError(t, err)
 
@@ -57,7 +62,7 @@ func mockAPIs(t *testing.T, llmScore int) *[]string {
 			require.NotContains(t, string(req.Body), "rev-token")
 			require.False(t, req.CacheSettings.GetStore())
 			require.NotNil(t, req.Timeout)
-			return jsonBody(t, map[string]any{"score": llmScore}), nil
+			return jsonBody(t, llmReply), nil
 		}
 		require.Equal(t, "Bearer gh-token", header(req, "Authorization"))
 
@@ -216,4 +221,79 @@ func TestEmptySecretFailsClearly(t *testing.T) {
 	rt := testutils.NewRuntime(t, testutils.Secrets{"main": {"GITHUB_TOKEN": ""}})
 	_, err := onHTTPTrigger(testConfig(), rt, payload(t, request("opened")))
 	require.ErrorContains(t, err, "secret GITHUB_TOKEN is empty")
+}
+
+func TestScorecard(t *testing.T) {
+	mockAPIsWith(t, map[string]any{
+		"score": 80, "persona": "issue",
+		"breakdown": []any{
+			map[string]any{"name": "issue_relevance", "points": 45, "max": 50},
+			map[string]any{"name": "value", "points": 20, "max": 30},
+			map[string]any{"name": "scope", "points": 15, "max": 20},
+		},
+		"findings": []any{map[string]any{"severity": "medium", "category": "value", "file": "src/pool.go",
+			"lines": "88-104", "description": "Retry path has no test"}},
+		"summary": "LLM prose stays out of the scorecard",
+	})
+	res, _, err := run(t, request("merged"))
+	require.NoError(t, err)
+	card := res.Scorecard
+	require.NotNil(t, card)
+
+	require.Equal(t, Weights{Evidence: 4000, CodeReviewer: 3000, LLM: 3000}, card.Weights)
+	require.Equal(t, []EvidenceCheck{
+		{Check: "linked_issue", Points: 25, Max: 25, Detail: "#384"},
+		{Check: "ci", Points: 25, Max: 25, Detail: "all checks passed"},
+		{Check: "approval", Points: 20, Max: 20, Detail: "1 approving review(s)"},
+		{Check: "tests", Points: 20, Max: 20, Detail: "src/pool_test.go"},
+		{Check: "size", Points: 10, Max: 10, Detail: "+42 / -17 lines"},
+	}, card.Evidence)
+
+	require.Len(t, card.Reviews, 2)
+	require.Equal(t, ReviewCard{Role: "code_reviewer", Provider: "code-reviewer-stub", Score: 100, Categories: []CategoryScore{}}, card.Reviews[0])
+	require.Equal(t, ReviewCard{Role: "llm", Persona: "issue", Provider: "llm", Score: 80, Categories: []CategoryScore{
+		{Name: "issue_relevance", Points: 45, Max: 50}, {Name: "value", Points: 20, Max: 30}, {Name: "scope", Points: 15, Max: 20},
+	}}, card.Reviews[1])
+	require.Equal(t, []Finding{{Persona: "issue", Severity: "medium", Category: "value", File: "src/pool.go",
+		Lines: "88-104", Note: "Retry path has no test"}}, card.Findings)
+
+	require.Equal(t, []Gate{
+		{Gate: "merged", Required: true, Passed: true},
+		{Gate: "ci_passed", Required: true, Passed: true},
+		{Gate: "linked_issue", Required: true, Passed: true},
+		{Gate: "min_score", Required: true, Passed: true, Detail: "94 / 70"},
+	}, card.Gates)
+	require.Equal(t, 94, res.Score) // 100*0.4 + 100*0.3 + 80*0.3
+
+	// The card is part of the evaluation: same score, different rubric, different hash.
+	t.Run("detail changes hash", func(t *testing.T) {
+		mockAPIsWith(t, map[string]any{"score": 80, "persona": "issue",
+			"breakdown": []any{map[string]any{"name": "value", "points": 20, "max": 30}}})
+		other, _, err := run(t, request("merged"))
+		require.NoError(t, err)
+		require.Equal(t, res.Score, other.Score)
+		require.NotEqual(t, res.EvaluationHash, other.EvaluationHash)
+	})
+}
+
+func TestDetailJSONBoundsReviewerOutput(t *testing.T) {
+	d, err := detailJSON([]byte(`{"score": 50}`))
+	require.NoError(t, err)
+	require.Empty(t, d) // Plain score reviewer.
+
+	long := strings.Repeat("x", 500)
+	d, err = detailJSON([]byte(`{"score":50,"persona":"Code; DROP","breakdown":[
+	  {"name":"tests","points":99,"max":25},{"name":"Bad Name","points":1,"max":5},{"name":"neg","points":-3,"max":10}],
+	  "findings":[{"severity":"critical","category":"tests","file":"a.go","lines":"x","description":"` + long + `"},
+	              {"severity":"high","description":"  "}]}`))
+	require.NoError(t, err)
+	var got reviewDetail
+	require.NoError(t, json.Unmarshal([]byte(d), &got))
+	require.Empty(t, got.Persona)
+	require.Equal(t, []CategoryScore{{Name: "tests", Points: 25, Max: 25}, {Name: "neg", Points: 0, Max: 10}}, got.Categories)
+	require.Len(t, got.Findings, 1)
+	require.Equal(t, "low", got.Findings[0].Severity)
+	require.Equal(t, "a.go", got.Findings[0].File)
+	require.Empty(t, got.Findings[0].Lines)
+	require.Len(t, got.Findings[0].Note, maxNoteChars)
 }

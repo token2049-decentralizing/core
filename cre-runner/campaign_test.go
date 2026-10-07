@@ -24,6 +24,7 @@ type fakePostgREST struct {
 	repos      []string
 	executions int
 	execRows   []map[string]any // served by GET cre_executions
+	appeals    []map[string]any // cre_execution_appeals; one per execution
 	requests   []string         // "METHOD table?query"
 	bodies     map[string]string
 }
@@ -79,6 +80,34 @@ func (f *fakePostgREST) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(rows)
 	case "DELETE campaigns":
 		f.campaign = nil
+		w.WriteHeader(http.StatusNoContent)
+	case "GET cre_execution_appeals":
+		rows := f.appeals
+		if rows == nil {
+			rows = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(rows)
+	case "POST cre_execution_appeals":
+		if len(f.appeals) > 0 {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"code":"23505","message":"duplicate key value violates unique constraint"}`)
+			return
+		}
+		var row map[string]any
+		_ = json.Unmarshal(body, &row)
+		row["id"], row["status"], row["created_at"] = "33333333-3333-3333-3333-333333333333", "open", "2026-10-07T08:00:00+00:00"
+		f.appeals = append(f.appeals, row)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode([]any{row})
+	case "PATCH cre_execution_appeals":
+		var u map[string]any
+		_ = json.Unmarshal(body, &u)
+		for k, v := range u {
+			f.appeals[0][k] = v
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "DELETE cre_execution_appeals":
+		f.appeals = nil
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "unexpected "+key, http.StatusTeapot)

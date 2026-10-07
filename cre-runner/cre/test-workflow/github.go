@@ -158,29 +158,29 @@ func (g githubFetcher) filesPage(repository string, pr int, after string) cre.Pr
 	})
 }
 
-// testsTouched pages through PR file paths until a test file is found.
-func (g githubFetcher) testsTouched(first cre.Promise[*http.Response], repository string, pr int) (bool, error) {
+// firstTestFile pages through PR file paths until a test file is found; "" if none.
+func (g githubFetcher) firstTestFile(first cre.Promise[*http.Response], repository string, pr int) (string, error) {
 	p := first
 	for range maxFilePages {
 		page, err := decode[ghFilesPage](p, "/graphql files")
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		if len(page.Errors) > 0 {
-			return false, fmt.Errorf("GitHub /graphql files: %s", page.Errors[0].Message)
+			return "", fmt.Errorf("GitHub /graphql files: %s", page.Errors[0].Message)
 		}
 		files := page.Data.Repository.PullRequest.Files
 		for _, f := range files.Nodes {
 			if testFileRe.MatchString(f.Path) {
-				return true, nil
+				return f.Path, nil
 			}
 		}
 		if !files.PageInfo.HasNextPage {
-			return false, nil
+			return "", nil
 		}
 		p = g.filesPage(repository, pr, files.PageInfo.EndCursor)
 	}
-	return false, nil
+	return "", nil
 }
 
 func decode[T any](p cre.Promise[*http.Response], path string) (T, error) {
@@ -229,7 +229,7 @@ func fetchGitHubEvidence(in evidenceInput, _ *slog.Logger, sr *http.SendRequeste
 	if err != nil {
 		return "", err
 	}
-	testsTouched, err := g.testsTouched(filesP, in.Repository, in.PRNumber)
+	testFile, err := g.firstTestFile(filesP, in.Repository, in.PRNumber)
 	if err != nil {
 		return "", err
 	}
@@ -257,7 +257,8 @@ func fetchGitHubEvidence(in evidenceInput, _ *slog.Logger, sr *http.SendRequeste
 		Additions:       pr.Additions,
 		Deletions:       pr.Deletions,
 		ChangedFiles:    pr.ChangedFiles,
-		TestsTouched:    testsTouched,
+		TestsTouched:    testFile != "",
+		TestFile:        testFile,
 		LinkedIssues:    parseLinkedIssues(pr.Body),
 		CIStatus:        ciStatusFrom(checks.CheckRuns),
 		ReviewApprovals: len(approvers),

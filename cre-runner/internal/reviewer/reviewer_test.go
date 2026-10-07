@@ -119,6 +119,7 @@ func TestReviewEndToEnd(t *testing.T) {
 	require.Equal(t, 200, status, out)
 	require.Equal(t, 90.0, out["score"]) // 35 + 25 (tests capped from 30) + 20 + 10
 	require.Equal(t, 25.0, out["categories"].(map[string]any)["tests"])
+	require.Equal(t, map[string]any{"name": "tests", "points": 25.0, "max": 25.0}, out["breakdown"].([]any)[1]) // Persona order.
 	require.Equal(t, "ep-test", out["model"])
 
 	llm.mu.Lock()
@@ -224,14 +225,32 @@ func TestRequestErrors(t *testing.T) {
 
 func TestParseReview(t *testing.T) {
 	p := personas["issue"]
-	score, cats, findings, _, err := parseReview(p, `{"categories":{"issue_relevance":60,"value":-5,"scope":19.6},"findings":[]}`)
+	score, cats, findings, _, err := parseReview(p, `{"categories":{"issue_relevance":60,"value":-5,"scope":19.6},"findings":[]}`, nil)
 	require.NoError(t, err)
 	require.Equal(t, 70, score) // 50 (capped) + 0 (floored) + 20 (rounded)
 	require.Equal(t, 50, cats["issue_relevance"])
 	require.Empty(t, findings)
 
-	_, _, _, _, err = parseReview(p, `{"categories":{"issue_relevance":10}}`)
+	_, _, _, _, err = parseReview(p, `{"categories":{"issue_relevance":10}}`, nil)
 	require.ErrorContains(t, err, "missing category")
+}
+
+func TestFindingsPointOnlyAtPRFiles(t *testing.T) {
+	files := diffFiles(sampleDiff)
+	require.Equal(t, map[string]bool{"src/pool.go": true, "package-lock.json": true, "src/pool_test.go": true}, files)
+
+	reply := `{"categories":{"correctness":30,"tests":10,"code_quality":20,"security":10},"findings":[
+	  {"severity":"HIGH","category":"tests","file":"b/src/pool.go","lines":"88-104","description":" Retry path untested "},
+	  {"severity":"urgent","category":"vibes","file":"/etc/passwd","lines":"1-2","description":"Made up file"},
+	  {"severity":"low","category":"code_quality","file":"src/pool.go","lines":"ten","description":"Bad lines"},
+	  {"severity":"low","description":""}]}`
+	_, _, findings, _, err := parseReview(personas["code"], reply, files)
+	require.NoError(t, err)
+	require.Equal(t, []finding{
+		{Severity: "high", Category: "tests", File: "src/pool.go", Lines: "88-104", Description: "Retry path untested"},
+		{Severity: "low", Description: "Made up file"},
+		{Severity: "low", Category: "code_quality", File: "src/pool.go", Description: "Bad lines"},
+	}, findings)
 }
 
 func TestPersonasSumTo100(t *testing.T) {

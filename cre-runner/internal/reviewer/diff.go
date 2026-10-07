@@ -66,6 +66,17 @@ func splitSections(diff string) []string {
 	return append(sections, diff[start:])
 }
 
+// diffFiles lists every path the diff changes, generated files included.
+func diffFiles(diff string) map[string]bool {
+	files := map[string]bool{}
+	for _, section := range splitSections(diff) {
+		if f := sectionFile(section); f != "" {
+			files[f] = true
+		}
+	}
+	return files
+}
+
 // sectionFile returns the "b/" path of a "diff --git a/x b/y" section.
 func sectionFile(section string) string {
 	line, _, _ := strings.Cut(section, "\n")

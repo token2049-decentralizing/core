@@ -19,11 +19,12 @@ import (
 )
 
 type fakeRecord struct {
-	row      executionRow
-	statuses []string
-	err      string
-	settled  bool
-	score    *int
+	row       executionRow
+	statuses  []string
+	err       string
+	settled   bool
+	score     *int
+	scorecard json.RawMessage
 }
 
 type fakeStore struct {
@@ -68,6 +69,9 @@ func (f *fakeStore) Update(id string, u *executionUpdate) error {
 	}
 	if u.Score != nil {
 		r.score = u.Score
+	}
+	if u.Scorecard != nil {
+		r.scorecard = u.Scorecard
 	}
 	return nil
 }
@@ -132,7 +136,8 @@ func newTestExecutor(store executionStore, eval fakeEval, concurrency, queue int
 func wait(x *executor) { x.Shutdown(context.Background()) }
 
 func okResult(context.Context, *evaluationRequest, *workflowConfig) (*evaluationResponse, error) {
-	return &evaluationResponse{Score: 30, Reward: "0", EvaluationHash: "0xabc", PolicyHash: "0xdef"}, nil
+	return &evaluationResponse{Score: 30, Reward: "0", EvaluationHash: "0xabc", PolicyHash: "0xdef",
+		Scorecard: json.RawMessage(`{"evidence":[]}`)}, nil
 }
 
 func eligibleResult(context.Context, *evaluationRequest, *workflowConfig) (*evaluationResponse, error) {
@@ -245,6 +250,7 @@ func TestExecutionRecordsLifecycle(t *testing.T) {
 	require.Equal(t, "machine-1", r.row.RunnerInstance)
 	require.JSONEq(t, `{"repository":"acme/pool","pr_number":7,"campaign_id":"`+usdcCampaign.ID+`","event":"opened"}`, string(r.row.Request))
 	require.Equal(t, 30, *r.score)
+	require.JSONEq(t, `{"evidence":[]}`, string(r.scorecard))
 	require.False(t, r.settled)
 	require.Equal(t, usdcCampaign.ID, got.CampaignID)
 }
