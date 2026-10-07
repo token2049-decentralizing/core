@@ -115,8 +115,8 @@ export default async function OverviewPage() {
               </EmptyMedia>
               <EmptyTitle>Waiting for the first webhook</EmptyTitle>
               <EmptyDescription>
-                Repositories show up here as soon as cre-runner receives an
-                event from a person (not a bot).
+                Repositories show up here as soon as Kudoz receives an event
+                from a person (not a bot).
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

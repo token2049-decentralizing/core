@@ -38,13 +38,15 @@ export function ApiErrorState({
         <EmptyDescription>
           {unreachable ? (
             <>
-              Start cre-runner or point <code>NEXT_PUBLIC_API_BASE_URL</code> at
-              a running instance. Currently using <code>{API_BASE_URL}</code>.
+              Start the Kudoz API (cre-runner) or point{" "}
+              <code>NEXT_PUBLIC_API_BASE_URL</code> at a running instance.
+              Currently using <code>{API_BASE_URL}</code>.
             </>
           ) : (
             <>
               {message}
-              {status >= 500 && " Check the cre-runner logs for details."}
+              {status >= 500 &&
+                " Check the Kudoz API (cre-runner) logs for details."}
             </>
           )}
         </EmptyDescription>

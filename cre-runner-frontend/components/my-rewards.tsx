@@ -145,9 +145,9 @@ function SignedInRewards() {
           <RiErrorWarningLine />
           <AlertTitle>Your rewards went to a different wallet</AlertTitle>
           <AlertDescription>
-            cre-runner pays @{githubLogin} at {data.wallet!.solana_address}, but
-            your account&apos;s wallet is {address}. This happens if you signed
-            in with another GitHub account than the one that opened the pull
+            Kudoz pays @{githubLogin} at {data.wallet!.solana_address}, but your
+            account&apos;s wallet is {address}. This happens if you signed in
+            with another GitHub account than the one that opened the pull
             requests. Ask the maintainers to check the wallet mapping.
           </AlertDescription>
         </Alert>
