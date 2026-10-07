@@ -269,10 +269,9 @@ fly deploy
 |------|----|
 | `NEXT_PUBLIC_API_BASE_URL` | `https://cre-runner.fly.dev` |
 | `NEXT_PUBLIC_PRIVY_APP_ID` | 和后端相同的 Privy App ID（不设则隐藏登录按钮） |
-| `NEXT_PUBLIC_SOLANA_CLUSTER` | Solana Explorer 链接用的网络：`devnet`（默认）/ `mainnet-beta` |
 | `NEXT_PUBLIC_SOLANA_RPC_URL` | 浏览器读链、模拟和发送交易用的 RPC（默认公共 devnet，会限流）。Helius 等 key 会暴露在浏览器里：在 Helius 后台把 key 限制到前端域名 |
 | `NEXT_PUBLIC_CONTRIB_ORACLE_PROGRAM_ID` | 合约程序 ID，默认 `FSy2V61Tvm6bVHV4dGtoJS7T16eE7ZNjvGHEyT3aw6MA` |
-| `NEXT_PUBLIC_USDC_MINT` | USDC campaign 默认的奖励 mint，默认 Circle devnet USDC `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
+| （固定）奖励代币 | 只在 Solana devnet；USDC = Circle devnet USDC `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`，SOL = wrapped SOL `So11111111111111111111111111111111111111112`。runner 拒绝从其他 mint 的链上 campaign 发奖 |
 
 前端域名要同时加进 `CORS_ALLOWED_ORIGINS`（后端）和 Privy Dashboard 的 Domains。
 
@@ -284,7 +283,8 @@ fly deploy
 
 campaign 详情页的 **Solana treasury** 区块用登录用户的 Privy Solana 钱包签名：
 
-- **Create on Solana**：一笔交易里 `create_campaign` + `fund_campaign`，签名的钱包成为 sponsor。mint 的小数位必须和奖励币种一致（USDC 6 / SOL 9）；SOL campaign 用 wrapped SOL，注资时自动把 SOL 包装进去。成功后把 vault 地址写进 campaign 的 `treasury_address`。
+- 新建、编辑、删除 campaign 和改状态都需要先用钱包登录（GitHub via Privy）。注意这是前端限制，API 本身还没有鉴权。
+- **Create on Solana**：一笔交易里 `create_campaign` + `fund_campaign`，签名的钱包成为 sponsor。奖励代币按币种固定（USDC / wrapped SOL 的 devnet 地址），SOL campaign 注资时自动把 SOL 包装进去。只连 devnet：RPC 的创世哈希不是 devnet 时拒绝签名。成功后把 vault 地址写进 campaign 的 `treasury_address`。
 - 已上链后显示状态、vault 余额、已付总额；sponsor 可以追加注资、暂停/恢复发奖。
 - 每次签名前先模拟，失败直接显示程序日志，不弹钱包。钱包需要约 0.01 SOL 付租金和手续费（在 faucet.solana.com 给钱包地址领）。
 

@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import {
   RiArrowDownSLine,
   RiDeleteBinLine,
+  RiGithubFill,
   RiPencilLine,
 } from "@remixicon/react"
 
@@ -18,6 +19,7 @@ import {
   type Campaign,
   type CampaignStatus,
 } from "@/lib/api"
+import { useWalletSession } from "@/components/require-wallet"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -39,6 +41,7 @@ const STATUS_ACTION: Record<CampaignStatus, string> = {
 export function CampaignActions({ campaign }: { campaign: Campaign }) {
   const router = useRouter()
   const [pending, setPending] = React.useState(false)
+  const session = useWalletSession()
 
   async function run(action: () => Promise<void>, failure: string) {
     setPending(true)
@@ -72,6 +75,17 @@ export function CampaignActions({ campaign }: { campaign: Campaign }) {
       router.push("/campaigns")
       router.refresh()
     }, "Couldn't delete the campaign.")
+  }
+
+  // Editing, status changes and deletion need a signed-in wallet.
+  if (!session.ready) return null
+  if (!session.signedIn) {
+    return session.signIn ? (
+      <Button variant="outline" onClick={session.signIn}>
+        <RiGithubFill data-icon="inline-start" />
+        Sign in to manage
+      </Button>
+    ) : null
   }
 
   return (

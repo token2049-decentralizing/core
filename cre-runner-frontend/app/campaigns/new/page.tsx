@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { attempt, listRepos } from "@/lib/api"
 import { CampaignForm } from "@/components/campaign-form"
 import { PageBody, PageHeader } from "@/components/page"
+import { RequireWallet } from "@/components/require-wallet"
 
 export const metadata: Metadata = { title: "New campaign" }
 
@@ -15,11 +16,13 @@ export default async function NewCampaignPage() {
         title="New campaign"
         description="Set a budget and the rules for rewarding merged pull requests. You can attach repositories now or later."
       />
-      <CampaignForm
-        knownRepos={
-          repos.ok ? repos.data.map((r) => r.repository_full_name) : []
-        }
-      />
+      <RequireWallet action="create a campaign">
+        <CampaignForm
+          knownRepos={
+            repos.ok ? repos.data.map((r) => r.repository_full_name) : []
+          }
+        />
+      </RequireWallet>
     </PageBody>
   )
 }
