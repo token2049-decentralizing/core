@@ -133,6 +133,8 @@ func TestMergedPaysOnSolana(t *testing.T) {
 	require.Equal(t, sig.String(), res.PayoutTx)
 	require.Equal(t, solanago.MustPublicKeyFromBase58(testProgram).Bytes(), got.Receiver)
 	require.Len(t, got.RemainingAccounts, 11)
+	require.NotNil(t, got.ComputeConfig) // The capability rejects nil.
+	require.Equal(t, uint32(payoutComputeLimit), got.ComputeConfig.ComputeLimit)
 	require.NotNil(t, got.Report)
 }
 
