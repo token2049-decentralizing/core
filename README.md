@@ -2,38 +2,39 @@
 
 **Reward contributions that matter.**
 
-Kudoz connects GitHub contributions to rewards on Solana. Sponsors fund campaigns, contributors solve issues, and campaign rules determine which merged pull requests earn a payout.
+Kudoz rewards meaningful open-source contributions. Sponsors fund campaigns, contributors solve GitHub issues, and qualifying merged pull requests earn rewards on Solana.
 
-**Contributors only need a GitHub account.** Sign in with GitHub; Kudoz automatically creates an embedded wallet through Privy when needed, so there’s no separate wallet setup.
+**Start with GitHub.** Contributors sign in with their GitHub account. Kudoz creates an embedded wallet through Privy when needed, with no separate wallet setup.
 
-## Watch
+## Meet Kudoz
 
-| Project Film | Demo |
+| Project Film | Product Demo |
 | --- | --- |
-| The idea behind Kudoz. | The product, from pull request to payout. |
-| [Watch the film](https://youtu.be/YzVUoyMnH0U) | Coming soon. |
+| [![Play the Kudoz project film](https://i.ytimg.com/vi/YzVUoyMnH0U/hqdefault.jpg)](https://youtu.be/YzVUoyMnH0U) | [![Play the Kudoz product demo](https://i.ytimg.com/vi/KA7dAEH4m4w/hqdefault.jpg)](https://youtu.be/KA7dAEH4m4w) |
+| The idea behind Kudoz. | See Kudoz in action. |
+| [▶ Watch the film](https://youtu.be/YzVUoyMnH0U) | [▶ Watch the demo](https://youtu.be/KA7dAEH4m4w) |
 
-<!-- Replace “Coming soon.” with [Watch the demo](URL) when ready. -->
+Select a thumbnail to watch on YouTube.
 
 ## How it works
 
-1. **Fund a campaign.** Set the repository, reward rules, and budget; deposit tokens into a Solana campaign vault.
-2. **Evaluate contributions.** GitHub events trigger a CRE workflow that combines PR evidence with AI reviews of code quality and issue relevance.
-3. **Reward qualifying work.** Open PRs receive a preview. Eligible merged PRs trigger a payout to the contributor’s GitHub-linked Solana wallet.
+1. **Fund a campaign.** Sponsors choose a repository, define reward rules, and deposit tokens into a campaign vault.
+2. **Evaluate contributions.** GitHub events trigger a Chainlink CRE workflow that combines PR evidence with AI reviews of code quality and issue relevance.
+3. **Pay for qualifying work.** Open PRs receive an evaluation preview. Eligible merged PRs trigger a payout to the contributor’s GitHub-linked wallet.
 
 ## Architecture
 
 ![Kudoz architecture: GitHub events and dashboard settings feed the runner; CRE combines evidence, reviews, and campaign rules; eligible merged PRs produce a reward report that pays from a Solana campaign vault.](docs/architecture.svg)
 
-The **runner** connects the dashboard, GitHub, and campaign data in Supabase. The **CRE workflow** calculates the score, checks eligibility, and produces the reward report. **Privy** resolves or creates the contributor’s wallet; the **Solana program** checks the payout and transfers tokens from the campaign vault.
+The **runner** connects GitHub, the dashboard, and campaign data in Supabase. **CRE** combines evidence and reviews into a reward decision. **Privy** handles contributor wallets, and the **Solana program** validates payouts and transfers tokens from the campaign vault.
 
-## Why this works
+## Why Kudoz
 
-- **Rules decide the reward.** AI reviews contribute to a score; the workflow applies campaign requirements such as a linked issue, passing CI, and a minimum score. Payment requires a merge.
-- **Funds have boundaries.** Sponsors fund the vault in advance. The Solana program enforces the reward cap, available balance, recipient, and one payout per PR per campaign.
-- **Decisions can be traced.** Scorecards explain the evaluation; an evaluation hash links the off-chain decision to its on-chain payout record.
+- **Quality guides rewards.** AI reviews inform the score. Campaign rules set eligibility requirements such as passing CI, a linked issue, and a minimum score. Payment requires a merge.
+- **Payouts have clear limits.** The Solana program checks the reward cap, vault balance, and recipient, and allows one payout per PR per campaign.
+- **Decisions are traceable.** Scorecards explain each evaluation. An evaluation hash links the decision to its on-chain payout record.
 
-**Current scope:** The payout and wallet integrations are implemented. The runner uses `cre workflow simulate`, with broadcasts to Solana devnet when configured. This is a hackathon prototype: the devnet mock forwarder does not verify reports, and this path does not provide decentralized CRE consensus.
+**Prototype status:** Wallet creation and payouts are implemented. The runner uses `cre workflow simulate` and can broadcast to Solana devnet when configured. The devnet mock forwarder does not verify reports; this prototype does not provide decentralized CRE consensus.
 
 ## Code & setup
 
