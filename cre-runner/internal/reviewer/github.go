@@ -104,7 +104,8 @@ func (g *github) issue(ctx context.Context, repo string, n int) (*issueInfo, err
 // Same pattern the workflow uses for linked issues.
 var linkedIssueRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)`)
 
-func firstLinkedIssue(body string) int {
+// FirstLinkedIssue returns the first "fixes #N" issue in a PR body, or 0.
+func FirstLinkedIssue(body string) int {
 	if m := linkedIssueRe.FindStringSubmatch(body); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return n

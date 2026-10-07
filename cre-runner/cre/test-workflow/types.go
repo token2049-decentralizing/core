@@ -14,11 +14,59 @@ type EvaluationRequest struct {
 }
 
 type EvaluationResponse struct {
-	Score          int    `json:"score"`
-	Eligible       bool   `json:"eligible"`
-	Reward         string `json:"reward"` // Token base units, as a string.
-	EvaluationHash string `json:"evaluation_hash"`
-	PolicyHash     string `json:"policy_hash"`
+	Score          int        `json:"score"`
+	Eligible       bool       `json:"eligible"`
+	Reward         string     `json:"reward"` // Token base units, as a string.
+	EvaluationHash string     `json:"evaluation_hash"`
+	PolicyHash     string     `json:"policy_hash"`
+	Scorecard      *Scorecard `json:"scorecard"` // Covered by evaluation_hash.
+}
+
+// Scorecard is what the contributor sees: every point and gate, pointers instead of code.
+type Scorecard struct {
+	Weights  Weights         `json:"weights"`
+	Evidence []EvidenceCheck `json:"evidence"`
+	Reviews  []ReviewCard    `json:"reviews"`
+	Findings []Finding       `json:"findings"`
+	Gates    []Gate          `json:"gates"`
+}
+
+type EvidenceCheck struct {
+	Check  string `json:"check"` // linked_issue | ci | approval | tests | size
+	Points int    `json:"points"`
+	Max    int    `json:"max"`
+	Detail string `json:"detail"`
+}
+
+// ReviewCard is one reviewer. Categories are empty for a stub reviewer.
+type ReviewCard struct {
+	Role       string          `json:"role"`    // code_reviewer | llm (config slot, sets the weight)
+	Persona    string          `json:"persona"` // what the reviewer judged, e.g. "code" or "issue"
+	Provider   string          `json:"provider"`
+	Score      int             `json:"score"`
+	Categories []CategoryScore `json:"categories"`
+}
+
+type CategoryScore struct {
+	Name   string `json:"name"`
+	Points int    `json:"points"`
+	Max    int    `json:"max"`
+}
+
+type Finding struct {
+	Persona  string `json:"persona"`
+	Severity string `json:"severity"` // high | medium | low
+	Category string `json:"category"`
+	File     string `json:"file"`  // Path in the PR, or "".
+	Lines    string `json:"lines"` // "88-104", or "".
+	Note     string `json:"note"`
+}
+
+type Gate struct {
+	Gate     string `json:"gate"` // merged | ci_passed | linked_issue | min_score
+	Required bool   `json:"required"`
+	Passed   bool   `json:"passed"`
+	Detail   string `json:"detail"`
 }
 
 // Amounts are decimal strings in whole tokens ("500", "0.25"): no float math on money.
@@ -107,6 +155,7 @@ type GitHubEvidence struct {
 	Deletions       int      `json:"deletions"`
 	ChangedFiles    int      `json:"changedFiles"`
 	TestsTouched    bool     `json:"testsTouched"`
+	TestFile        string   `json:"testFile"` // First test file found, if any.
 	LinkedIssues    []int    `json:"linkedIssues"`
 	CIStatus        string   `json:"ciStatus"` // "PASS" | "FAIL" | "UNKNOWN"
 	ReviewApprovals int      `json:"reviewApprovals"`

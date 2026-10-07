@@ -132,6 +132,35 @@ func TestPoolLooksUpInstallationPerRepo(t *testing.T) {
 	require.Same(t, fixed, NewPool(fixed).ForRepo("any/repo"))
 }
 
+func TestWithPermissionsScopesEveryRepoToken(t *testing.T) {
+	write := map[string]string{"pull_requests": "write", "metadata": "read"}
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/pool/installation":
+			_, _ = w.Write([]byte(`{"id":1}`))
+		case "/app/installations/1/access_tokens":
+			var body map[string]map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			got = body["permissions"]
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_w", "expires_at": time.Now().Add(time.Hour)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	read := NewPool(&Minter{APIURL: srv.URL, AppID: "1", Key: testKey(t)})
+	_, err := WithPermissions(read, write).ForRepo("acme/pool").Token(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, write, got)
+	_, err = read.ForRepo("acme/pool").Token(context.Background()) // The original pool stays read-only.
+	require.NoError(t, err)
+	require.Equal(t, ReadOnly, got)
+
+	require.Equal(t, Static("t"), WithPermissions(Static("t"), write))
+}
+
 func TestAppFromEnvKeyContents(t *testing.T) {
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(testKey(t))})
 	t.Setenv("GITHUB_APP_ID", "1")

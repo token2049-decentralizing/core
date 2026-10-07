@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -39,19 +41,31 @@ var personas = map[string]persona{
 	},
 }
 
+// finding points at what cost points: a category and, when the model names a real PR file, where.
 type finding struct {
-	Severity    string `json:"severity"`
+	Severity    string `json:"severity"` // high | medium | low
+	Category    string `json:"category"` // one of the persona's categories, or ""
+	File        string `json:"file"`     // path changed in the PR, or ""
+	Lines       string `json:"lines"`    // "88" or "88-104" in the new file, or ""
 	Description string `json:"description"`
 }
 
+// categoryScore is one rubric line, in persona order.
+type categoryScore struct {
+	Name   string `json:"name"`
+	Points int    `json:"points"`
+	Max    int    `json:"max"`
+}
+
 type reviewResult struct {
-	Persona    string         `json:"persona"`
-	Score      int            `json:"score"`
-	Categories map[string]int `json:"categories"`
-	Findings   []finding      `json:"findings"`
-	Summary    string         `json:"summary"`
-	Model      string         `json:"model"`
-	HeadSHA    string         `json:"head_sha"`
+	Persona    string          `json:"persona"`
+	Score      int             `json:"score"`
+	Categories map[string]int  `json:"categories"`
+	Breakdown  []categoryScore `json:"breakdown"`
+	Findings   []finding       `json:"findings"`
+	Summary    string          `json:"summary"`
+	Model      string          `json:"model"`
+	HeadSHA    string          `json:"head_sha"`
 }
 
 func systemPrompt(p persona) string {
@@ -74,8 +88,10 @@ Reply with ONLY a JSON object, no prose, no code fences:
 		}
 		fmt.Fprintf(&b, "%q: <0-%d>", c.Name, c.Max)
 	}
-	b.WriteString(`}, "findings": [{"severity": "high|medium|low", "description": "<one sentence>"}], "summary": "<one sentence>"}
-Give at most 5 findings, most important first.`)
+	b.WriteString(`}, "findings": [{"severity": "high|medium|low", "category": "<category the finding cost points in>",
+"file": "<changed file path from the diff, or empty>", "lines": "<start-end line numbers in the new file, or empty>",
+"description": "<one sentence>"}], "summary": "<one sentence>"}
+Give at most 5 findings, most important first. Point to the exact file and lines; never quote code.`)
 	return b.String()
 }
 
@@ -84,6 +100,7 @@ type reviewInput struct {
 	PRNumber   int
 	PR         *prInfo
 	Diff       string
+	Files      map[string]bool // Paths changed in the PR; findings may only point at these.
 	Issue      *issueInfo
 }
 
@@ -102,8 +119,31 @@ func userPrompt(in reviewInput) string {
 	return string(b)
 }
 
+var linesRe = regexp.MustCompile(`^[1-9][0-9]{0,5}(-[1-9][0-9]{0,5})?$`)
+
+// cleanFinding keeps only what can be checked: a known severity and category, and a file the PR changed.
+func cleanFinding(p persona, f finding, files map[string]bool) finding {
+	switch f.Severity = strings.ToLower(strings.TrimSpace(f.Severity)); f.Severity {
+	case "high", "medium", "low":
+	default:
+		f.Severity = "low"
+	}
+	if !slices.ContainsFunc(p.Categories, func(c category) bool { return c.Name == f.Category }) {
+		f.Category = ""
+	}
+	f.File = strings.TrimPrefix(strings.TrimSpace(f.File), "b/")
+	if !files[f.File] {
+		f.File, f.Lines = "", ""
+	}
+	if f.Lines = strings.ReplaceAll(f.Lines, " ", ""); !linesRe.MatchString(f.Lines) {
+		f.Lines = ""
+	}
+	f.Description = truncate(strings.TrimSpace(f.Description), 300)
+	return f
+}
+
 // parseReview validates the model reply and computes the score from capped categories.
-func parseReview(p persona, reply string) (score int, cats map[string]int, findings []finding, summary string, err error) {
+func parseReview(p persona, reply string, files map[string]bool) (score int, cats map[string]int, findings []finding, summary string, err error) {
 	raw, err := extractJSON(reply)
 	if err != nil {
 		return 0, nil, nil, "", err
@@ -129,10 +169,13 @@ func parseReview(p persona, reply string) (score int, cats map[string]int, findi
 	if len(out.Findings) > 5 {
 		out.Findings = out.Findings[:5]
 	}
-	if out.Findings == nil {
-		out.Findings = []finding{}
+	findings = []finding{}
+	for _, f := range out.Findings {
+		if f = cleanFinding(p, f, files); f.Description != "" {
+			findings = append(findings, f)
+		}
 	}
-	return score, cats, out.Findings, truncate(out.Summary, 500), nil
+	return score, cats, findings, truncate(out.Summary, 500), nil
 }
 
 var errHeadMoved = errors.New("PR head moved")
@@ -162,9 +205,10 @@ func (r *reviewer) prepare(ctx context.Context, repo string, n int, headSHA stri
 		return reviewInput{}, err
 	default:
 		in.Diff = trimDiff(string(diff), r.maxDiffChars)
+		in.Files = diffFiles(string(diff))
 	}
 
-	if num := firstLinkedIssue(pr.Body); num > 0 {
+	if num := FirstLinkedIssue(pr.Body); num > 0 {
 		if is, err := r.gh.issue(ctx, repo, num); err == nil {
 			in.Issue = is
 		} else if !errors.Is(err, errNotFound) {
@@ -184,9 +228,13 @@ func (r *reviewer) review(ctx context.Context, name string, in reviewInput) (*re
 		if err != nil {
 			return nil, err
 		}
-		score, cats, findings, summary, err := parseReview(p, reply)
+		score, cats, findings, summary, err := parseReview(p, reply, in.Files)
 		if err == nil {
-			return &reviewResult{Persona: name, Score: score, Categories: cats, Findings: findings,
+			breakdown := make([]categoryScore, len(p.Categories))
+			for i, c := range p.Categories {
+				breakdown[i] = categoryScore{Name: c.Name, Points: cats[c.Name], Max: c.Max}
+			}
+			return &reviewResult{Persona: name, Score: score, Categories: cats, Breakdown: breakdown, Findings: findings,
 				Summary: summary, Model: r.llm.model, HeadSHA: in.PR.Head.SHA}, nil
 		}
 		lastErr = err

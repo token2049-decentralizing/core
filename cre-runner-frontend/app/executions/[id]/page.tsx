@@ -12,10 +12,12 @@ import {
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { ApiErrorState } from "@/components/api-error-state"
+import { AppealButton } from "@/components/appeal-button"
 import { AutoRefresh } from "@/components/auto-refresh"
 import { ExecutionStatusBadge } from "@/components/execution-status-badge"
 import { prExecutionsHref } from "@/components/execution-table"
 import { PageBody, PageHeader, Section } from "@/components/page"
+import { ScoreBreakdown } from "@/components/score-breakdown"
 import { Button } from "@/components/ui/button"
 
 export async function generateMetadata(
@@ -90,6 +92,9 @@ export default async function ExecutionPage(
         }
         actions={
           <>
+            {e.status === "completed" && (
+              <AppealButton executionId={e.id} appeal={e.appeal} />
+            )}
             <Button
               variant="outline"
               nativeButton={false}
@@ -159,6 +164,25 @@ export default async function ExecutionPage(
             : "—"}
         </Fact>
       </dl>
+
+      {e.scorecard ? (
+        <Section title="Score breakdown">
+          <ScoreBreakdown
+            card={e.scorecard}
+            score={e.score}
+            repo={e.repository_full_name}
+            prNumber={e.pr_number}
+            headSha={e.head_sha}
+          />
+        </Section>
+      ) : (
+        e.status === "completed" && (
+          <p className="text-xs text-muted-foreground">
+            No score breakdown: this run finished before breakdowns were
+            recorded.
+          </p>
+        )
+      )}
 
       <div className="grid gap-10 lg:grid-cols-[1fr_20rem]">
         <div className="flex min-w-0 flex-col gap-10">

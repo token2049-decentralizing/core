@@ -968,6 +968,8 @@ type executionDetail struct {
 	executionItem
 	Request        json.RawMessage `json:"request"` // HTTP trigger payload sent to the workflow
 	RunnerInstance *string         `json:"runner_instance"`
+	Scorecard      json.RawMessage `json:"scorecard"` // Score breakdown from the workflow, null for older runs
+	Appeal         *appealRow      `json:"appeal"`    // Human review request, if any
 }
 
 var executionStatuses = []string{statusQueued, statusRunning, statusCompleted, statusFailed, statusSkipped}
@@ -1072,7 +1074,7 @@ func (a *api) getExecution(c *gin.Context) {
 	}
 	var rows []executionDetail
 	_, err := a.db.From(executionsTable).
-		Select(executionColumns+",request,runner_instance", "", false).
+		Select(executionColumns+",request,runner_instance,scorecard", "", false).
 		Eq("id", id).
 		Limit(1, "").
 		ExecuteTo(&rows)
@@ -1084,7 +1086,18 @@ func (a *api) getExecution(c *gin.Context) {
 		apiError(c, http.StatusNotFound, "execution not found")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": rows[0]})
+	d := rows[0]
+	if len(d.Scorecard) == 0 {
+		d.Scorecard = json.RawMessage("null")
+	}
+	var appeals []appealRow
+	if _, err := a.db.From(appealsTable).Select(appealColumns, "", false).Eq("execution_id", id).Limit(1, "").
+		ExecuteTo(&appeals); err != nil {
+		log.Printf("api: load appeal for %s: %v", id, err) // The page still works without it.
+	} else if len(appeals) > 0 {
+		d.Appeal = &appeals[0]
+	}
+	c.JSON(http.StatusOK, gin.H{"data": d})
 }
 
 func (a *api) listPRExecutions(c *gin.Context) {

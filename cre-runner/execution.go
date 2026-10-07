@@ -38,11 +38,12 @@ type evaluationRequest struct {
 }
 
 type evaluationResponse struct {
-	Score          int    `json:"score"`
-	Eligible       bool   `json:"eligible"`
-	Reward         string `json:"reward"`
-	EvaluationHash string `json:"evaluation_hash"`
-	PolicyHash     string `json:"policy_hash"`
+	Score          int             `json:"score"`
+	Eligible       bool            `json:"eligible"`
+	Reward         string          `json:"reward"`
+	EvaluationHash string          `json:"evaluation_hash"`
+	PolicyHash     string          `json:"policy_hash"`
+	Scorecard      json.RawMessage `json:"scorecard,omitempty"` // Score breakdown, stored as is.
 }
 
 // prTrigger is the evaluation a pull_request webhook asks for.
@@ -114,16 +115,17 @@ type executionRow struct {
 
 // executionUpdate is a status change; nil fields are left as they are.
 type executionUpdate struct {
-	Status         string     `json:"status"`
-	Error          *string    `json:"error,omitempty"`
-	Score          *int       `json:"score,omitempty"`
-	Eligible       *bool      `json:"eligible,omitempty"`
-	Reward         *string    `json:"reward,omitempty"`
-	EvaluationHash *string    `json:"evaluation_hash,omitempty"`
-	PolicyHash     *string    `json:"policy_hash,omitempty"`
-	Settled        *bool      `json:"settled,omitempty"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	Status         string          `json:"status"`
+	Error          *string         `json:"error,omitempty"`
+	Score          *int            `json:"score,omitempty"`
+	Eligible       *bool           `json:"eligible,omitempty"`
+	Reward         *string         `json:"reward,omitempty"`
+	EvaluationHash *string         `json:"evaluation_hash,omitempty"`
+	PolicyHash     *string         `json:"policy_hash,omitempty"`
+	Scorecard      json.RawMessage `json:"scorecard,omitempty"`
+	Settled        *bool           `json:"settled,omitempty"`
+	StartedAt      *time.Time      `json:"started_at,omitempty"`
+	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
 }
 
 type executionStore interface {
@@ -377,6 +379,9 @@ func (x *executor) execute(t *prTrigger, c campaignRow) {
 		EvaluationHash: &res.EvaluationHash,
 		PolicyHash:     &res.PolicyHash,
 		Settled:        &settled,
+	}
+	if len(res.Scorecard) > 0 && string(res.Scorecard) != "null" {
+		u.Scorecard = res.Scorecard
 	}
 	err = x.finish(log, row.ID, u)
 	if settled && isUniqueViolation(err) {
