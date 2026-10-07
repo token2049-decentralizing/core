@@ -62,7 +62,9 @@ func submitRewardDecision(runtime cre.Runtime, cfg *SolanaConfig, d RewardDecisi
 	if reply.TxStatus != solana.TxStatus_TX_STATUS_SUCCESS ||
 		(reply.ReceiverContractExecutionStatus != nil &&
 			*reply.ReceiverContractExecutionStatus != solana.ReceiverContractExecutionStatus_RECEIVER_CONTRACT_EXECUTION_STATUS_SUCCESS) {
-		return "", fmt.Errorf("solana payout failed (%s): %s", reply.TxStatus, reply.GetErrorMessage())
+		// The message can be a multi-line RPC error dump (with program logs): keep it on one line.
+		msg := strings.Join(strings.Fields(reply.GetErrorMessage()), " ")
+		return "", fmt.Errorf("solana payout failed (%s): %s", reply.TxStatus, msg)
 	}
 	sig := solanago.SignatureFromBytes(reply.TxSignature).String()
 	logger.Info("reward paid on Solana", "tx", sig, "recipient", d.Recipient, "amount", d.Reward.String())
