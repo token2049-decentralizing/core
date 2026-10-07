@@ -962,20 +962,7 @@
             "type": "u64"
           },
           {
-            "name": "score",
-            "type": "u8"
-          },
-          {
             "name": "evaluation_hash",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "policy_hash",
             "type": {
               "array": [
                 "u8",

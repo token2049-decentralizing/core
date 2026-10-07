@@ -97,9 +97,7 @@ impl Env {
             contribution_id: sha256(contribution.as_bytes()),
             recipient: self.contributor.pubkey(),
             amount,
-            score: 91,
             evaluation_hash: [9u8; 32],
-            policy_hash: POLICY,
         }
     }
 
@@ -292,7 +290,7 @@ fn pays_contributor_through_forwarder_once() {
 
     let payout = env.svm.get_account(&env.payout_pda(&r.contribution_id)).unwrap();
     let p = Payout::try_deserialize(&mut payout.data.as_slice()).unwrap();
-    assert_eq!((p.recipient, p.amount, p.score, p.evaluation_hash), (env.contributor.pubkey(), 150 * USDC, 91, [9u8; 32]));
+    assert_eq!((p.recipient, p.amount, p.evaluation_hash), (env.contributor.pubkey(), 150 * USDC, [9u8; 32]));
     assert_eq!(p.workflow_execution_report_id, [0, 1]);
 
     // A second report for the same PR (re-evaluation, retried webhook) never pays again.
@@ -348,10 +346,6 @@ fn enforces_workflow_owner() {
 fn enforces_campaign_rules() {
     let mut env = setup(NO_OWNER);
     let ata = env.contributor_ata;
-
-    let mut bad_policy = env.report("acme/pool#1", 10 * USDC);
-    bad_policy.policy_hash = [1u8; 32];
-    assert_err(env.submit(&bad_policy, ata, NO_OWNER), "PolicyMismatch");
 
     assert_err(env.submit(&env.report("acme/pool#2", 201 * USDC), ata, NO_OWNER), "RewardAboveCap");
     assert_err(env.submit(&env.report("acme/pool#3", 0), ata, NO_OWNER), "ZeroReward");
@@ -414,4 +408,13 @@ fn sponsor_closes_and_gets_the_rest_back() {
 
     // Vault account is gone, so a report fails before the status check.
     assert_err(env.submit(&env.report("acme/pool#8", 1 * USDC), env.contributor_ata, NO_OWNER), "AccountNotInitialized");
+}
+
+// CRE caps a Solana report at 265 bytes: 109 metadata + 32 account hash + 4 (Vec length) + payload.
+#[test]
+fn reward_report_fits_cre_report_limit() {
+    let env = setup(NO_OWNER);
+    let payload = env.report("acme/pool#1", 1).try_to_vec().unwrap();
+    assert_eq!(payload.len(), 120);
+    assert!(109 + 32 + 4 + payload.len() <= 265);
 }

@@ -177,7 +177,7 @@ fly secrets set --stage SOLANA_RPC_URL="https://devnet.helius-rpc.com/?api-key=<
 - 链上支付失败（余额不足、超过上限、已经付过）同样标为 failed，原因写在 error 里。
 - 只有 merge 才会碰 Solana；预览从不建账户、不发交易。
 
-**报告大小**：CRE 默认把 Solana 写报告限制在 265 字节（生产 DON 的限制），而一次 `RewardReport` 写入是 298 字节（元数据 109 + 账户 hash 32 + payload 157）。runner 用 `cre/simulation-limits.json` 模拟，它只把 `ChainWrite.Solana.ReportSizeLimit` 调到 `1kb`，其他限制保持 CLI 默认值（可用 `CRE_LIMITS` 换成别的文件）。将来部署到真正的 CRE DON 前，需要把 `RewardReport` 缩到 120 字节以内（例如去掉 `policy_hash`、把 `contribution_id` 截到 16 字节）并升级合约。
+**大小限制**：CRE 的 Solana 写报告最多 265 字节（元数据 109 + 账户 hash 32 + 4 + payload），forwarder 交易最多 1232 字节。`RewardReport` 因此是 120 字节，不带 `score` 和 `policy_hash`（两者都已包含在 `evaluation_hash` 里），报告正好 265 字节，交易约 1203 字节。runner 仍然用 `cre/simulation-limits.json`（只把报告上限放宽到 `1kb`）作为余量，可用 `CRE_LIMITS` 换成别的文件。
 
 **安全提示（devnet）**：mock forwarder 不验证 DON 签名，任何人都能通过它提交报告，每个不同的 PR ID 最多可被领走 `max_reward_per_pr`。devnet campaign 只放少量演示代币。上主网前要 `update-config` 到 keystone forwarder 并设置 `--workflow-owner`。
 

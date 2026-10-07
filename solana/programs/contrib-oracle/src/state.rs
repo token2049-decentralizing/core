@@ -38,7 +38,9 @@ pub struct Campaign {
     pub vault: Pubkey,
     /// Cap per PR, in token base units.
     pub max_reward_per_pr: u64,
-    /// Policy the CRE workflow must have applied. All zeros = not enforced.
+    /// Recorded at creation but no longer enforced: reports don't carry a policy hash
+    /// (CRE report size limit); evaluation_hash commits to the policy instead.
+    /// Kept so existing campaign accounts keep their layout.
     pub policy_hash: [u8; 32],
     pub status: CampaignStatus,
     pub total_paid: u64,
@@ -55,9 +57,7 @@ pub struct Payout {
     pub contribution_id: [u8; 32],
     pub recipient: Pubkey,
     pub amount: u64,
-    pub score: u8,
     pub evaluation_hash: [u8; 32],
-    pub policy_hash: [u8; 32],
     pub workflow_execution_report_id: [u8; 2],
     pub paid_at: i64,
 }

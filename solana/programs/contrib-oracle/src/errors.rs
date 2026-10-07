@@ -15,7 +15,7 @@ pub enum OracleError {
     #[msg("Campaign is not active")]
     CampaignNotActive,
     #[msg("Report was produced under a different campaign policy")]
-    PolicyMismatch,
+    PolicyMismatch, // Unused since reports dropped policy_hash; kept so error codes stay stable.
     #[msg("Reward must be greater than zero")]
     ZeroReward,
     #[msg("Reward exceeds the campaign's max_reward_per_pr")]

@@ -95,13 +95,11 @@ func buildRewardReport(cfg *SolanaConfig, d RewardDecision) (solanago.PublicKey,
 	if d.Score < 0 || d.Score > 100 {
 		return program, none, nil, errors.New("score must be 0-100")
 	}
+	// Score and policy hash stay off-chain (the report must fit CRE's 265-byte limit and the
+	// 1232-byte transaction); evaluation_hash commits to both.
 	evalHash, err := hash32(d.EvaluationHash)
 	if err != nil {
 		return program, none, nil, fmt.Errorf("evaluation_hash: %w", err)
-	}
-	policyHash, err := hash32(d.PolicyHash)
-	if err != nil {
-		return program, none, nil, fmt.Errorf("policy_hash: %w", err)
 	}
 	contribution := sha256.Sum256([]byte(fmt.Sprintf("%s#%d", d.Repository, d.PRNumber)))
 
@@ -157,9 +155,7 @@ func buildRewardReport(cfg *SolanaConfig, d RewardDecision) (solanago.PublicKey,
 		ContributionId: contribution,
 		Recipient:      recipient,
 		Amount:         d.Reward.Uint64(),
-		Score:          uint8(d.Score),
 		EvaluationHash: evalHash,
-		PolicyHash:     policyHash,
 	}
 	return program, report, accounts, nil
 }

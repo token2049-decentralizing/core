@@ -60,9 +60,6 @@ pub fn on_report(ctx: Context<OnReport>, metadata: Vec<u8>, payload: Vec<u8>) ->
         Pubkey::find_program_address(&[CAMPAIGN_SEED, report.campaign_id.as_ref()], &crate::ID);
     require_keys_eq!(campaign.key(), expected_campaign, OracleError::CampaignMismatch);
     require!(campaign.status == CampaignStatus::Active, OracleError::CampaignNotActive);
-    if campaign.policy_hash != [0u8; 32] {
-        require!(report.policy_hash == campaign.policy_hash, OracleError::PolicyMismatch);
-    }
     require!(report.amount > 0, OracleError::ZeroReward);
     require!(report.amount <= campaign.max_reward_per_pr, OracleError::RewardAboveCap);
     require!(ctx.accounts.vault.amount >= report.amount, OracleError::InsufficientFunds);
@@ -103,9 +100,7 @@ pub fn on_report(ctx: Context<OnReport>, metadata: Vec<u8>, payload: Vec<u8>) ->
         contribution_id: report.contribution_id,
         recipient: report.recipient,
         amount: report.amount,
-        score: report.score,
         evaluation_hash: report.evaluation_hash,
-        policy_hash: report.policy_hash,
         workflow_execution_report_id: meta.report_id,
         paid_at: Clock::get()?.unix_timestamp,
     };

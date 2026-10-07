@@ -46,13 +46,14 @@ func TestBuildRewardReport(t *testing.T) {
 	require.Equal(t, sha256.Sum256([]byte("acme/pool#102")), r.ContributionId)
 	require.Equal(t, testRecipient, r.Recipient.String())
 	require.Equal(t, uint64(485000000), r.Amount)
-	require.Equal(t, uint8(97), r.Score)
 	require.Equal(t, byte(0xab), r.EvaluationHash[0])
 
-	// Borsh layout on_report decodes: 16 + 32 + 32 + 8 + 1 + 32 + 32 bytes, no trailing data.
+	// Borsh layout on_report decodes: 16 + 32 + 32 + 8 + 32 bytes, no trailing data. With the
+	// forwarder framing (109 metadata + 32 account hash + 4) it must fit CRE's 265-byte report.
 	b, err := r.Marshal()
 	require.NoError(t, err)
-	require.Len(t, b, 153)
+	require.Len(t, b, 120)
+	require.LessOrEqual(t, 109+32+4+len(b), 265)
 
 	require.Len(t, accounts, 11)
 	require.Equal(t, mockForwarderSt, solanago.PublicKeyFromBytes(accounts[0].PublicKey).String())
@@ -75,7 +76,7 @@ func TestBuildRewardReportRejectsBadInput(t *testing.T) {
 		"campaign not uuid": func(d *RewardDecision, _ *SolanaConfig) { d.CampaignID = "example-oss-2026" },
 		"zero reward":       func(d *RewardDecision, _ *SolanaConfig) { d.Reward = big.NewInt(0) },
 		"reward over u64":   func(d *RewardDecision, _ *SolanaConfig) { d.Reward = new(big.Int).Lsh(big.NewInt(1), 64) },
-		"bad hash":          func(d *RewardDecision, _ *SolanaConfig) { d.PolicyHash = "0x12" },
+		"bad hash":          func(d *RewardDecision, _ *SolanaConfig) { d.EvaluationHash = "0x12" },
 		"bad mint":          func(_ *RewardDecision, c *SolanaConfig) { c.Mint = "nope" },
 	} {
 		d, c := testDecision(), testSolana()

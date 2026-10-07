@@ -1106,9 +1106,7 @@ type RewardReport struct {
 
 	// Token base units.
 	Amount         uint64    `json:"amount"`
-	Score          uint8     `json:"score"`
 	EvaluationHash [32]uint8 `json:"evaluation_hash"`
-	PolicyHash     [32]uint8 `json:"policy_hash"`
 }
 
 func (obj RewardReport) MarshalWithEncoder(encoder *binary.Encoder) (err error) {
@@ -1132,20 +1130,10 @@ func (obj RewardReport) MarshalWithEncoder(encoder *binary.Encoder) (err error) 
 	if err != nil {
 		return errors.NewField("Amount", err)
 	}
-	// Serialize `Score`:
-	err = encoder.Encode(obj.Score)
-	if err != nil {
-		return errors.NewField("Score", err)
-	}
 	// Serialize `EvaluationHash`:
 	err = encoder.Encode(obj.EvaluationHash)
 	if err != nil {
 		return errors.NewField("EvaluationHash", err)
-	}
-	// Serialize `PolicyHash`:
-	err = encoder.Encode(obj.PolicyHash)
-	if err != nil {
-		return errors.NewField("PolicyHash", err)
 	}
 	return nil
 }
@@ -1181,20 +1169,10 @@ func (obj *RewardReport) UnmarshalWithDecoder(decoder *binary.Decoder) (err erro
 	if err != nil {
 		return errors.NewField("Amount", err)
 	}
-	// Deserialize `Score`:
-	err = decoder.Decode(&obj.Score)
-	if err != nil {
-		return errors.NewField("Score", err)
-	}
 	// Deserialize `EvaluationHash`:
 	err = decoder.Decode(&obj.EvaluationHash)
 	if err != nil {
 		return errors.NewField("EvaluationHash", err)
-	}
-	// Deserialize `PolicyHash`:
-	err = decoder.Decode(&obj.PolicyHash)
-	if err != nil {
-		return errors.NewField("PolicyHash", err)
 	}
 	return nil
 }
